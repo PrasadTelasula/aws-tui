@@ -415,7 +415,7 @@ fn draw_suggestions(f: &mut Frame, input_area: Rect, container: Rect, term: &cra
 // ─── INSTANCES TAB ──────────────────────────────────────────────────
 
 fn draw_instances(f: &mut Frame, area: Rect, app: &App) {
-    use crate::instances::{InstanceFocus, SsmConnectionStatus};
+    use crate::instances::InstanceFocus;
     let is = &app.instances_state;
 
     if is.profiles.is_empty() {
@@ -560,82 +560,73 @@ fn draw_instances(f: &mut Frame, area: Rect, app: &App) {
     }
     f.render_widget(List::new(items), left_split[1]);
 
-    // Right panel: SSM terminal
-    let ssm_active = is.focus == InstanceFocus::SsmTerminal;
-    let _ssm_border = if ssm_active { BLUE } else { FG4 };
+    // Right panel: instance details
+    if let Some(inst) = is.selected_instance() {
+        let has_session = is.has_active_session(&inst.instance_id);
 
-    let right_split = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(1)])
-        .split(right_area);
+        let mut detail_lines: Vec<Line> = vec![
+            Line::from(vec![
+                Span::styled(" ", Style::default()),
+                Span::styled(
+                    &inst.name,
+                    Style::default().fg(FG).add_modifier(Modifier::BOLD),
+                ),
+                if has_session {
+                    Span::styled("  ● connected", Style::default().fg(GREEN))
+                } else {
+                    Span::raw("")
+                },
+            ]),
+            Line::from(""),
+        ];
 
-    // SSM output
-    if is.ssm_output.is_empty() {
-        let status_text = match &is.ssm_status {
-            SsmConnectionStatus::Disconnected => "  Select an instance and press Enter to connect",
-            SsmConnectionStatus::Connecting => "  Connecting…",
-            SsmConnectionStatus::Connected => "  Connected. Type commands below.",
-            SsmConnectionStatus::Error(e) => e.as_str(),
+        let details = vec![
+            (ICON_HASH, "Instance", inst.instance_id.as_str(), FG2),
+            (ICON_GLOBE, "AZ", inst.az.as_str(), TEAL),
+            (ICON_SERVER, "Type", inst.instance_type.as_str(), FG2),
+            (ICON_GLOBE, "Private IP", inst.private_ip.as_str(), FG2),
+        ];
+
+        for (icon, label, value, color) in &details {
+            detail_lines.push(Line::from(vec![
+                Span::styled(format!(" {} ", icon), Style::default().fg(FG3)),
+                Span::styled(format!("{:<12}", label), Style::default().fg(FG3)),
+                Span::styled(*value, Style::default().fg(*color)),
+            ]));
+        }
+
+        detail_lines.push(Line::from(""));
+        detail_lines.push(Line::from(""));
+
+        if has_session {
+            detail_lines.push(Line::from(Span::styled(
+                "  Session opened in external terminal",
+                Style::default().fg(GREEN),
+            )));
+        } else {
+            detail_lines.push(Line::from(Span::styled(
+                "  Press Enter to open SSM session in a new terminal window",
+                Style::default().fg(FG3),
+            )));
+        }
+
+        f.render_widget(Paragraph::new(detail_lines), right_area);
+    } else {
+        let hint = if is.loading_instances {
+            "  Loading instances…"
+        } else if let Some(ref err) = is.last_error {
+            err.as_str()
+        } else {
+            "  Select a profile and region to browse instances"
         };
         f.render_widget(
-            Paragraph::new(Span::styled(status_text, Style::default().fg(FG3))),
-            right_split[0],
+            Paragraph::new(vec![
+                Line::from(""),
+                Line::from(Span::styled(hint, Style::default().fg(FG3))),
+            ]),
+            right_area,
         );
-    } else {
-        let lines: Vec<Line> = is.ssm_output.iter().map(|line| {
-            let color = if line.starts_with(">>>") { TEAL }
-                else if line.starts_with("[stderr]") { AMBER }
-                else { FG2 };
-            Line::from(Span::styled(line.as_str(), Style::default().fg(color)))
-        }).collect();
-
-        let total = lines.len();
-        let visible = right_split[0].height as usize;
-        let bottom = if total > visible { total - visible } else { 0 };
-        let scroll = bottom.saturating_sub(is.ssm_scroll_offset);
-
-        f.render_widget(
-            Paragraph::new(lines).scroll((scroll as u16, 0)),
-            right_split[0],
-        );
-
-        if total > visible {
-            let mut sb = ScrollbarState::new(total).position(scroll);
-            f.render_stateful_widget(
-                Scrollbar::new(ScrollbarOrientation::VerticalRight).style(Style::default().fg(FG4)),
-                right_split[0],
-                &mut sb,
-            );
-        }
     }
-
-    // SSM input
-    let connected = is.ssm_status == SsmConnectionStatus::Connected;
-    let typing = app.input_mode == InputMode::SsmInput;
-    let cursor = if typing && connected && app.cursor_visible { "▏" } else { "" };
-    let (before, after) = if is.ssm_cursor <= is.ssm_input.len() {
-        is.ssm_input.split_at(is.ssm_cursor)
-    } else {
-        (is.ssm_input.as_str(), "")
-    };
-
-    let input_bg = if typing { BG_HL } else { BG };
-    let instance_label = if !is.instances.is_empty() {
-        let inst = &is.instances[is.selected_instance.min(is.instances.len().saturating_sub(1))];
-        format!(" [{}] ", inst.instance_id)
-    } else {
-        " $ ".to_string()
-    };
-
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(instance_label, Style::default().fg(if connected { GREEN } else { FG4 })),
-            Span::styled(before, Style::default().fg(FG)),
-            Span::styled(cursor, Style::default().fg(BLUE)),
-            Span::styled(after, Style::default().fg(FG)),
-        ])).style(Style::default().bg(input_bg)),
-        right_split[1],
-    );
 
     // Region dropdown popup
     if is.region_dropdown_open {
@@ -1159,42 +1150,25 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
             spans.push(desc_span(" search  "));
         }
         AppTab::Instances => {
-            if app.input_mode == InputMode::SsmInput {
-                spans.push(key_span("Enter"));
-                spans.push(desc_span(" send  "));
-                spans.push(key_span("S+↑↓"));
-                spans.push(desc_span(" scroll  "));
-                spans.push(key_span("Ctrl+D"));
-                spans.push(desc_span(" disconnect  "));
-                spans.push(key_span("Esc"));
-                spans.push(desc_span(" back  "));
-            } else {
-                use crate::instances::InstanceFocus;
-                match app.instances_state.focus {
-                    InstanceFocus::RegionList => {
-                        spans.push(key_span("Enter"));
-                        spans.push(desc_span(" open region  "));
-                        spans.push(key_span("Tab"));
-                        spans.push(desc_span(" focus  "));
-                    }
-                    InstanceFocus::InstanceList => {
-                        spans.push(key_span("↑↓"));
-                        spans.push(desc_span(" select  "));
-                        spans.push(key_span("Enter"));
-                        spans.push(desc_span(" connect  "));
-                        spans.push(key_span("r"));
-                        spans.push(desc_span(" refresh  "));
-                        spans.push(key_span("Tab"));
-                        spans.push(desc_span(" focus  "));
-                    }
-                    InstanceFocus::SsmTerminal => {
-                        spans.push(key_span("i"));
-                        spans.push(desc_span(" type  "));
-                        spans.push(key_span("Tab"));
-                        spans.push(desc_span(" focus  "));
-                    }
+            use crate::instances::InstanceFocus;
+            match app.instances_state.focus {
+                InstanceFocus::RegionList => {
+                    spans.push(key_span("Enter"));
+                    spans.push(desc_span(" region  "));
+                }
+                InstanceFocus::InstanceList => {
+                    spans.push(key_span("↑↓"));
+                    spans.push(desc_span(" select  "));
+                    spans.push(key_span("Enter"));
+                    spans.push(desc_span(" open SSM  "));
+                    spans.push(key_span("r"));
+                    spans.push(desc_span(" refresh  "));
                 }
             }
+            spans.push(key_span("Tab"));
+            spans.push(desc_span(" focus  "));
+            spans.push(key_span("Ctrl+H/L"));
+            spans.push(desc_span(" profile  "));
         }
         AppTab::Terminal => {
             if app.input_mode == InputMode::TerminalInput {

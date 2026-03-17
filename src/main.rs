@@ -305,48 +305,6 @@ async fn run_app(
                     continue;
                 }
 
-                // ── SSM Input mode (Instances tab) ──
-                if app.input_mode == InputMode::SsmInput {
-                    match key.code {
-                        KeyCode::Esc => {
-                            app.input_mode = InputMode::Normal;
-                        }
-                        KeyCode::Tab => {
-                            app.input_mode = InputMode::Normal;
-                            app.instances_state.cycle_focus();
-                        }
-                        KeyCode::Enter => {
-                            app.instances_state.send_command().await;
-                        }
-                        KeyCode::Backspace => {
-                            app.instances_state.backspace();
-                        }
-                        KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                            app.instances_state.scroll_up(3);
-                        }
-                        KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                            app.instances_state.scroll_down(3);
-                        }
-                        KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            app.instances_state.prev_profile();
-                            app.instances_state.fetch_instances();
-                        }
-                        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            app.instances_state.next_profile();
-                            app.instances_state.fetch_instances();
-                        }
-                        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            app.instances_state.disconnect_ssm().await;
-                            app.input_mode = InputMode::Normal;
-                        }
-                        KeyCode::Char(c) => {
-                            app.instances_state.insert_char(c);
-                        }
-                        _ => {}
-                    }
-                    continue;
-                }
-
                 // ── Normal mode ──
                 match key.code {
                     KeyCode::Char('q') => {
@@ -385,19 +343,14 @@ async fn run_app(
                     // Instances tab: normal mode keys
                     KeyCode::Tab if app.active_tab == AppTab::Instances => {
                         app.instances_state.cycle_focus();
-                        // Auto-enter SsmInput mode when focusing SSM terminal
-                        if app.instances_state.focus == instances::InstanceFocus::SsmTerminal {
-                            app.input_mode = InputMode::SsmInput;
-                        }
                     }
                     KeyCode::Up | KeyCode::Char('k') if app.active_tab == AppTab::Instances => {
                         if app.instances_state.region_dropdown_open {
                             app.instances_state.prev_region();
                         } else {
                             match app.instances_state.focus {
-                                instances::InstanceFocus::RegionList => {},
+                                instances::InstanceFocus::RegionList => {}
                                 instances::InstanceFocus::InstanceList => app.instances_state.prev_instance(),
-                                instances::InstanceFocus::SsmTerminal => app.instances_state.scroll_up(3),
                             }
                         }
                     }
@@ -406,9 +359,8 @@ async fn run_app(
                             app.instances_state.next_region();
                         } else {
                             match app.instances_state.focus {
-                                instances::InstanceFocus::RegionList => {},
+                                instances::InstanceFocus::RegionList => {}
                                 instances::InstanceFocus::InstanceList => app.instances_state.next_instance(),
-                                instances::InstanceFocus::SsmTerminal => app.instances_state.scroll_down(3),
                             }
                         }
                     }
@@ -422,11 +374,8 @@ async fn run_app(
                                     app.instances_state.region_dropdown_open = true;
                                 }
                                 instances::InstanceFocus::InstanceList => {
-                                    app.instances_state.connect_ssm().await;
-                                    app.instances_state.focus = instances::InstanceFocus::SsmTerminal;
-                                    app.input_mode = InputMode::SsmInput;
+                                    app.instances_state.open_ssm_terminal();
                                 }
-                                instances::InstanceFocus::SsmTerminal => {}
                             }
                         }
                     }
@@ -437,10 +386,6 @@ async fn run_app(
                     }
                     KeyCode::Char('r') if app.active_tab == AppTab::Instances => {
                         app.instances_state.fetch_instances();
-                    }
-                    KeyCode::Char('i') if app.active_tab == AppTab::Instances => {
-                        app.instances_state.focus = instances::InstanceFocus::SsmTerminal;
-                        app.input_mode = InputMode::SsmInput;
                     }
                     KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL)
                         && app.active_tab == AppTab::Instances =>

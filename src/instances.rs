@@ -222,6 +222,7 @@ impl InstancesState {
         let script = if term_program == "iTerm.app" {
             // iTerm2: split pane vertically, set session name, run SSM
             let set_name = format!("SSM: {} ({})", name, instance_id);
+            let shell_cmd = format!("/bin/zsh -l -c '{}'", ssm_cmd);
             format!(
                 "tell application \"iTerm2\"\n\
                     tell current session of current window\n\
@@ -231,7 +232,7 @@ impl InstancesState {
                         end tell\n\
                     end tell\n\
                 end tell",
-                ssm_cmd, set_name
+                shell_cmd, set_name
             )
         } else {
             // Terminal.app: new window

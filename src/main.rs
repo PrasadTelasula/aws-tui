@@ -456,6 +456,24 @@ async fn run_app(
                     }
                     KeyCode::Enter if app.active_tab == AppTab::Sessions => {
                         app.start_selected().await;
+                        // Interactive SSM shell: suspend TUI, hand terminal to plugin
+                        if let Some(cmd) = app.pending_ssm_command.take() {
+                            disable_raw_mode()?;
+                            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+                            terminal.show_cursor()?;
+
+                            let _ = std::process::Command::new("sh")
+                                .arg("-c")
+                                .arg(&cmd)
+                                .stdin(std::process::Stdio::inherit())
+                                .stdout(std::process::Stdio::inherit())
+                                .stderr(std::process::Stdio::inherit())
+                                .status();
+
+                            enable_raw_mode()?;
+                            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                            terminal.clear()?;
+                        }
                     }
                     KeyCode::Char('s') if app.active_tab == AppTab::Sessions => {
                         app.stop_selected().await;

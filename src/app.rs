@@ -74,6 +74,10 @@ pub struct App {
     pub confirm_action: ConfirmAction,
     pub _alias_file: PathBuf,
     pub list_scroll_offset: usize,
+    /// Set when an interactive SSM shell session needs the real TTY.
+    /// The main loop suspends the TUI, runs this command with inherited
+    /// stdin/stdout/stderr, then resumes the TUI.
+    pub pending_ssm_command: Option<String>,
 
     // Tab state
     pub active_tab: AppTab,
@@ -122,6 +126,7 @@ impl App {
             confirm_action: ConfirmAction::None,
             _alias_file: alias_file,
             list_scroll_offset: 0,
+            pending_ssm_command: None,
             active_tab: AppTab::Sessions,
             terminal_state: TerminalState::new(),
             tick: 0,
@@ -320,7 +325,20 @@ impl App {
             AliasKind::SsoLogin { session_name } => SessionKind::SsoLogin {
                 session_name: session_name.clone(),
             },
-            AliasKind::SsmSession { .. } => SessionKind::SsmSession,
+            AliasKind::SsmSession { local_port, .. } => {
+                if local_port.is_none() {
+                    // Interactive shell — needs a real TTY. Signal the main loop
+                    // to suspend the TUI, run with inherited terminal, then resume.
+                    self.pending_ssm_command = Some(command.clone());
+                    self.show_toast(
+                        format!("{} Launching SSM terminal…", ICON_CHECK),
+                        ToastKind::Info,
+                    );
+                    return;
+                }
+                // Port-forwarding — runs fine in the background with piped I/O.
+                SessionKind::SsmSession
+            }
             AliasKind::Other => SessionKind::Other,
         };
 

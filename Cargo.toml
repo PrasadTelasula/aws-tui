@@ -1,0 +1,19 @@
+[package]
+name = "aws-tui"
+version = "0.1.0"
+edition = "2021"
+description = "A beautiful TUI for managing AWS SSM sessions"
+
+[[bin]]
+name = "aws-tui"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+tokio = { version = "1", features = ["full"] }
+regex = "1"
+dirs = "5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+unicode-width = "0.2"

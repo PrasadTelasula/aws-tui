@@ -900,12 +900,18 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
             }
         }
 
-        // SSO: show connected status
+        // SSO: show connected status + expiry
         if matches!(status, SessionStatus::Connected) {
-            spans.push(Span::styled(
-                "  connected",
-                Style::default().fg(TEAL),
-            ));
+            spans.push(Span::styled("  connected", Style::default().fg(TEAL)));
+            if let Some((_, &remaining)) = app.token_expiry.get(&alias.name).map(|(s, r)| (s, r)).as_ref() {
+                let color = if remaining < 300 { RED }
+                            else if remaining < 1800 { AMBER }
+                            else { FG3 };
+                spans.push(Span::styled(
+                    format!("  exp {}", crate::session::format_expiry(remaining)),
+                    Style::default().fg(color),
+                ));
+            }
         }
         if matches!(status, SessionStatus::Expired) {
             spans.push(Span::styled("  expired", Style::default().fg(AMBER)));

@@ -171,6 +171,11 @@ impl SessionManager {
                                         ">>> SSO login succeeded (session: {})",
                                         session_name
                                     ));
+                                    // Seed expiry immediately from cache
+                                    if let Some((exp_str, remaining)) = read_sso_token_expiry(session_name) {
+                                        s.token_expires_at = Some(exp_str);
+                                        s.token_remaining_secs = Some(remaining);
+                                    }
 
                                     // Resolve profile from ~/.aws/config
                                     let profile = resolve_profile_for_sso_session(session_name);
@@ -218,7 +223,8 @@ impl SessionManager {
             }
 
             // For SSO sessions with a resolved profile, start liveness watcher
-            if let SessionKind::SsoLogin { .. } = kind_clone {
+            if let SessionKind::SsoLogin { session_name: ref sso_name } = kind_clone {
+                let sso_name = sso_name.clone();
                 let profile = {
                     let s = session_clone.lock().await;
                     s.sso_profile.clone()
@@ -226,7 +232,7 @@ impl SessionManager {
                 if let Some(profile) = profile {
                     let sess = session_clone.clone();
                     tokio::spawn(async move {
-                        sso_liveness_watcher(sess, profile).await;
+                        sso_liveness_watcher(sess, profile, sso_name).await;
                     });
                 }
             }
@@ -370,11 +376,19 @@ impl SessionManager {
                         ));
                     }
 
+                    // Seed expiry from cache immediately on startup
+                    if let Some((exp_str, remaining)) = read_sso_token_expiry(sso_session_name) {
+                        let mut s = session.lock().await;
+                        s.token_expires_at = Some(exp_str);
+                        s.token_remaining_secs = Some(remaining);
+                    }
+
                     // Start liveness watcher
                     let sess_clone = session.clone();
                     let prof_clone = profile.clone();
+                    let sso_name = sso_session_name.clone();
                     tokio::spawn(async move {
-                        sso_liveness_watcher(sess_clone, prof_clone).await;
+                        sso_liveness_watcher(sess_clone, prof_clone, sso_name).await;
                     });
 
                     self.sessions.insert(alias_name.clone(), session);
@@ -431,9 +445,14 @@ fn resolve_profile_for_sso_session(session_name: &str) -> Option<String> {
 
 // ─── SSO Liveness Watcher ───────────────────────────────────────────
 // Periodically runs `aws sts get-caller-identity --profile <profile>`
-// to verify the SSO session is still valid. This is the source of truth.
+// to verify the SSO session is still valid. Also reads the SSO token
+// cache to surface the real expiry time.
 
-async fn sso_liveness_watcher(session: Arc<Mutex<Session>>, profile: String) {
+async fn sso_liveness_watcher(
+    session: Arc<Mutex<Session>>,
+    profile: String,
+    sso_session_name: String,
+) {
     // Initial check after 5 seconds (give CLI time to cache credentials)
     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
@@ -446,6 +465,9 @@ async fn sso_liveness_watcher(session: Arc<Mutex<Session>>, profile: String) {
         if status != SessionStatus::Connected {
             break;
         }
+
+        // Read token expiry from SSO cache (sync file I/O — do before locking)
+        let expiry = read_sso_token_expiry(&sso_session_name);
 
         // Run sts get-caller-identity to check liveness
         let check_result = check_sts_identity(&profile).await;
@@ -460,10 +482,14 @@ async fn sso_liveness_watcher(session: Arc<Mutex<Session>>, profile: String) {
 
             match check_result {
                 StsCheckResult::Valid { account, arn } => {
-                    s.token_expires_at = Some(format!("account: {}", account));
-                    // We don't know exact expiry from STS, but session is alive
-                    // Increment a "last verified" counter
-                    s.token_remaining_secs = None; // STS doesn't tell us remaining time
+                    // Prefer real expiry from cache; fall back to account label
+                    if let Some((exp_str, remaining)) = expiry {
+                        s.token_expires_at = Some(exp_str);
+                        s.token_remaining_secs = Some(remaining);
+                    } else {
+                        s.token_expires_at = Some(format!("account: {}", account));
+                        s.token_remaining_secs = None;
+                    }
                     s.output_lines.push(format!(
                         ">>> Session verified — {} ({})",
                         arn, account
@@ -494,6 +520,157 @@ async fn sso_liveness_watcher(session: Arc<Mutex<Session>>, profile: String) {
         // Check every 60 seconds
         tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
     }
+}
+
+// ─── SSO Cache Reader ───────────────────────────────────────────────
+// Reads ~/.aws/sso/cache/*.json to find the token for the given
+// sso-session and returns (display_string, remaining_secs).
+
+fn read_sso_token_expiry(sso_session_name: &str) -> Option<(String, u64)> {
+    let cache_dir = dirs::home_dir()?.join(".aws/sso/cache");
+    let entries = fs::read_dir(&cache_dir).ok()?;
+
+    // Also look up the start_url from ~/.aws/config for fallback matching
+    let start_url = read_sso_start_url(sso_session_name);
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let json: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        // Token files have "accessToken"; skip role-credential files
+        if json.get("accessToken").is_none() {
+            continue;
+        }
+
+        // Match by sessionName (AWS CLI v2 newer format) …
+        let name_match = json
+            .get("sessionName")
+            .and_then(|v| v.as_str())
+            .map(|s| s == sso_session_name)
+            .unwrap_or(false);
+
+        // … or by startUrl (older format / fallback)
+        let url_match = start_url
+            .as_deref()
+            .zip(json.get("startUrl").and_then(|v| v.as_str()))
+            .map(|(cfg_url, tok_url)| {
+                cfg_url.trim_end_matches('/') == tok_url.trim_end_matches('/')
+            })
+            .unwrap_or(false);
+
+        if !name_match && !url_match {
+            continue;
+        }
+
+        let expires_at = match json.get("expiresAt").and_then(|v| v.as_str()) {
+            Some(s) => s,
+            None => continue,
+        };
+
+        let expiry_unix = match parse_iso8601_to_unix(expires_at) {
+            Some(t) => t,
+            None => continue,
+        };
+
+        let remaining = expiry_unix.saturating_sub(now);
+        let display = format_expiry(remaining);
+        return Some((display, remaining));
+    }
+
+    None
+}
+
+/// Read sso_start_url from the [sso-session <name>] section of ~/.aws/config.
+fn read_sso_start_url(sso_session_name: &str) -> Option<String> {
+    let config_path = dirs::home_dir()?.join(".aws/config");
+    let content = fs::read_to_string(config_path).ok()?;
+
+    let target = format!("[sso-session {}]", sso_session_name);
+    let mut in_section = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == target {
+            in_section = true;
+            continue;
+        }
+        if in_section {
+            if trimmed.starts_with('[') {
+                break;
+            }
+            if let Some((key, val)) = trimmed.split_once('=') {
+                if key.trim() == "sso_start_url" {
+                    return Some(val.trim().to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Parse an ISO 8601 UTC timestamp to a Unix timestamp (seconds).
+/// Handles: "2024-01-15T10:30:00UTC", "…Z", "…+00:00", "…+0000"
+fn parse_iso8601_to_unix(s: &str) -> Option<u64> {
+    let s = s.trim();
+    // Strip timezone suffix
+    let s = s
+        .strip_suffix("UTC")
+        .or_else(|| s.strip_suffix('Z'))
+        .or_else(|| s.strip_suffix("+00:00"))
+        .or_else(|| s.strip_suffix("+0000"))
+        .unwrap_or(s);
+
+    if s.len() < 19 {
+        return None;
+    }
+    let year: i64  = s.get(0..4)?.parse().ok()?;
+    let month: i64 = s.get(5..7)?.parse().ok()?;
+    let day: i64   = s.get(8..10)?.parse().ok()?;
+    let hour: i64  = s.get(11..13)?.parse().ok()?;
+    let min: i64   = s.get(14..16)?.parse().ok()?;
+    let sec: i64   = s.get(17..19)?.parse().ok()?;
+
+    // Days since 1970-01-01 — Howard Hinnant's civil_from_days inverse
+    let y   = if month <= 2 { year - 1 } else { year };
+    let m   = month;
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+
+    if days < 0 {
+        return None;
+    }
+    Some((days * 86400 + hour * 3600 + min * 60 + sec) as u64)
+}
+
+/// Format remaining seconds as a human-readable string: "3d 2h", "1h 14m", "45m"
+pub fn format_expiry(remaining_secs: u64) -> String {
+    if remaining_secs == 0 {
+        return "expired".to_string();
+    }
+    let days  = remaining_secs / 86400;
+    let hours = (remaining_secs % 86400) / 3600;
+    let mins  = (remaining_secs % 3600) / 60;
+    if days > 0        { format!("{}d {}h", days, hours) }
+    else if hours > 0  { format!("{}h {}m", hours, mins) }
+    else               { format!("{}m", mins.max(1)) }
 }
 
 enum StsCheckResult {

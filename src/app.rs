@@ -1,6 +1,6 @@
 use crate::parser::{Alias, AliasKind};
 use crate::session::{SessionKind, SessionManager, SessionStatus};
-use crate::terminal::{LiveProfile, TerminalState};
+use crate::terminal::TerminalState;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -414,28 +414,15 @@ impl App {
         self.running_count = count;
 
         // Refresh live profiles for the terminal tab
-        let mut profiles: Vec<LiveProfile> = Vec::new();
+        let mut profiles = Vec::new();
         for (i, alias) in self.aliases.iter().enumerate() {
             if let AliasKind::SsoLogin { session_name } = &alias.kind {
                 if self.session_statuses[i] == SessionStatus::Connected {
-                    // Get the profile name from session manager
-                    let (exp_info, _) = self.session_manager.get_token_expiry(&alias.name).await;
-                    let profile_name = exp_info
-                        .as_ref()
-                        .and_then(|s| s.strip_prefix("account: "))
-                        .map(|_| {
-                            // We stored "account: XXXX" but need the profile name.
-                            // The profile is stored in the session's sso_profile field.
-                            // Let's get it from session_manager.
-                            alias.name.clone() // fallback
-                        })
-                        .unwrap_or_else(|| alias.name.clone());
-
-                    // Try to get the actual profile name from session
                     let actual_profile = self.session_manager.get_sso_profile(&alias.name).await;
+                    let profile_name = actual_profile.unwrap_or_else(|| alias.name.clone());
 
-                    profiles.push(LiveProfile {
-                        profile_name: actual_profile.unwrap_or(profile_name),
+                    profiles.push(crate::terminal::LiveProfile {
+                        profile_name,
                         _alias_name: alias.name.clone(),
                         _session_name: session_name.clone(),
                     });
@@ -443,17 +430,7 @@ impl App {
             }
         }
         self.terminal_state.live_profiles = profiles;
-
-        // If selected profile index is out of bounds, reset
-        if let Some(idx) = self.terminal_state.selected_profile {
-            if idx >= self.terminal_state.live_profiles.len() {
-                self.terminal_state.selected_profile = if self.terminal_state.live_profiles.is_empty() {
-                    None
-                } else {
-                    Some(0)
-                };
-            }
-        }
+        self.terminal_state.sync_profiles();
     }
 
     pub async fn process_output_messages(&mut self) {

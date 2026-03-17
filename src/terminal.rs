@@ -1,6 +1,6 @@
 use crate::completer::Completer;
+use std::collections::HashSet;
 use std::process::Stdio;
-use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -11,10 +11,9 @@ pub struct CommandEntry {
     pub output_lines: Vec<String>,
     pub exit_code: Option<i32>,
     pub is_running: bool,
-    pub _started_at: Instant,
 }
 
-/// A live profile that can be selected in the terminal
+/// A live profile available for terminal use
 #[derive(Debug, Clone)]
 pub struct LiveProfile {
     pub profile_name: String,
@@ -22,7 +21,9 @@ pub struct LiveProfile {
     pub _session_name: String,
 }
 
-pub struct TerminalState {
+/// A single terminal instance — independent input, history, output, completer
+pub struct TerminalInstance {
+    pub profile: Option<String>, // None = default (no profile)
     pub input: String,
     pub cursor_pos: usize,
     pub history: Vec<String>,
@@ -31,19 +32,12 @@ pub struct TerminalState {
     pub entries: Vec<CommandEntry>,
     pub scroll_offset: usize,
     pub completer: Completer,
-    cmd_tx: mpsc::UnboundedSender<(usize, String, bool)>,
-    cmd_rx: mpsc::UnboundedReceiver<(usize, String, bool)>,
-
-    /// Available live profiles (refreshed from app state)
-    pub live_profiles: Vec<LiveProfile>,
-    /// Currently selected profile index (None = no profile / default)
-    pub selected_profile: Option<usize>,
 }
 
-impl TerminalState {
-    pub fn new() -> Self {
-        let (tx, rx) = mpsc::unbounded_channel();
+impl TerminalInstance {
+    pub fn new(profile: Option<String>) -> Self {
         Self {
+            profile,
             input: String::new(),
             cursor_pos: 0,
             history: Vec::new(),
@@ -52,38 +46,11 @@ impl TerminalState {
             entries: Vec::new(),
             scroll_offset: 0,
             completer: Completer::new(),
-            cmd_tx: tx,
-            cmd_rx: rx,
-            live_profiles: Vec::new(),
-            selected_profile: None,
         }
     }
 
-    /// Process incoming command output from running subprocesses.
-    pub fn tick(&mut self) {
-        while let Ok((entry_idx, line, is_stderr)) = self.cmd_rx.try_recv() {
-            // Sentinel for process exit
-            if line.starts_with("__EXIT__:") {
-                if let Some(entry) = self.entries.get_mut(entry_idx) {
-                    let code_str = &line["__EXIT__:".len()..];
-                    entry.exit_code = code_str.parse().ok();
-                    entry.is_running = false;
-                }
-                continue;
-            }
-
-            if let Some(entry) = self.entries.get_mut(entry_idx) {
-                let formatted = if is_stderr {
-                    format!("[stderr] {}", line)
-                } else {
-                    line
-                };
-                entry.output_lines.push(formatted);
-                if entry.output_lines.len() > 1000 {
-                    entry.output_lines.drain(..entry.output_lines.len() - 1000);
-                }
-            }
-        }
+    pub fn profile_label(&self) -> &str {
+        self.profile.as_deref().unwrap_or("default")
     }
 
     pub fn insert_char(&mut self, c: char) {
@@ -131,13 +98,8 @@ impl TerminalState {
         }
     }
 
-    pub fn cursor_home(&mut self) {
-        self.cursor_pos = 0;
-    }
-
-    pub fn cursor_end(&mut self) {
-        self.cursor_pos = self.input.len();
-    }
+    pub fn cursor_home(&mut self) { self.cursor_pos = 0; }
+    pub fn cursor_end(&mut self) { self.cursor_pos = self.input.len(); }
 
     pub fn clear_line(&mut self) {
         self.input.clear();
@@ -146,9 +108,7 @@ impl TerminalState {
     }
 
     pub fn delete_word_backward(&mut self) {
-        if self.cursor_pos == 0 {
-            return;
-        }
+        if self.cursor_pos == 0 { return; }
         let before = &self.input[..self.cursor_pos];
         let trimmed = before.trim_end();
         let word_start = trimmed.rfind(' ').map(|i| i + 1).unwrap_or(0);
@@ -158,9 +118,7 @@ impl TerminalState {
     }
 
     pub fn history_up(&mut self) {
-        if self.history.is_empty() {
-            return;
-        }
+        if self.history.is_empty() { return; }
         match self.history_index {
             None => {
                 self.saved_input = self.input.clone();
@@ -194,77 +152,171 @@ impl TerminalState {
         self.completer.dismiss();
     }
 
-    /// Get the currently selected profile name
-    pub fn active_profile(&self) -> Option<&str> {
-        self.selected_profile
-            .and_then(|i| self.live_profiles.get(i))
-            .map(|p| p.profile_name.as_str())
+    pub fn total_output_lines(&self) -> usize {
+        self.entries.iter().map(|e| 1 + e.output_lines.len() + 1).sum()
     }
 
-    /// Cycle to next profile (wraps around, None at the end = default)
-    pub fn next_profile(&mut self) {
-        if self.live_profiles.is_empty() {
-            return;
+    pub fn scroll_up(&mut self, amount: usize) {
+        let max = self.total_output_lines().saturating_sub(1);
+        self.scroll_offset = (self.scroll_offset + amount).min(max);
+    }
+
+    pub fn scroll_down(&mut self, amount: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(amount);
+    }
+}
+
+/// Top-level terminal state — manages multiple terminal instances
+pub struct TerminalState {
+    pub terminals: Vec<TerminalInstance>,
+    pub active_idx: usize,
+
+    /// Available live profiles (refreshed from app state)
+    pub live_profiles: Vec<LiveProfile>,
+
+    /// Channel for receiving command output
+    cmd_tx: mpsc::UnboundedSender<(usize, String, bool)>,
+    cmd_rx: mpsc::UnboundedReceiver<(usize, String, bool)>,
+
+    /// Global entry counter (across all terminals) for unique IDs
+    next_entry_id: usize,
+    /// Maps entry_id → (terminal_index, entry_index_within_terminal)
+    entry_map: std::collections::HashMap<usize, (usize, usize)>,
+}
+
+impl TerminalState {
+    pub fn new() -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        Self {
+            terminals: vec![TerminalInstance::new(None)], // "default" terminal
+            active_idx: 0,
+            live_profiles: Vec::new(),
+            cmd_tx: tx,
+            cmd_rx: rx,
+            next_entry_id: 0,
+            entry_map: std::collections::HashMap::new(),
         }
-        self.selected_profile = match self.selected_profile {
-            None => Some(0),
-            Some(i) if i + 1 >= self.live_profiles.len() => None,
-            Some(i) => Some(i + 1),
-        };
     }
 
-    /// Cycle to previous profile
-    pub fn prev_profile(&mut self) {
-        if self.live_profiles.is_empty() {
-            return;
+    /// Get the active terminal instance
+    pub fn active(&self) -> &TerminalInstance {
+        &self.terminals[self.active_idx]
+    }
+
+    /// Get the active terminal instance mutably
+    pub fn active_mut(&mut self) -> &mut TerminalInstance {
+        &mut self.terminals[self.active_idx]
+    }
+
+    /// Switch to next terminal
+    pub fn next_terminal(&mut self) {
+        if !self.terminals.is_empty() {
+            self.active_idx = (self.active_idx + 1) % self.terminals.len();
         }
-        self.selected_profile = match self.selected_profile {
-            None => Some(self.live_profiles.len() - 1),
-            Some(0) => None,
-            Some(i) => Some(i - 1),
-        };
     }
 
+    /// Switch to previous terminal
+    pub fn prev_terminal(&mut self) {
+        if !self.terminals.is_empty() {
+            self.active_idx = if self.active_idx == 0 {
+                self.terminals.len() - 1
+            } else {
+                self.active_idx - 1
+            };
+        }
+    }
+
+    /// Sync terminals with live profiles. Creates new terminals for new profiles,
+    /// keeps existing ones (to preserve history).
+    pub fn sync_profiles(&mut self) {
+        let existing: HashSet<Option<String>> = self.terminals
+            .iter()
+            .map(|t| t.profile.clone())
+            .collect();
+
+        for profile in &self.live_profiles {
+            let key = Some(profile.profile_name.clone());
+            if !existing.contains(&key) {
+                self.terminals.push(TerminalInstance::new(key));
+            }
+        }
+
+        // Ensure active_idx is valid
+        if self.active_idx >= self.terminals.len() {
+            self.active_idx = 0;
+        }
+    }
+
+    /// Process incoming command output from all running subprocesses
+    pub fn tick(&mut self) {
+        while let Ok((entry_id, line, is_stderr)) = self.cmd_rx.try_recv() {
+            if let Some(&(term_idx, entry_idx)) = self.entry_map.get(&entry_id) {
+                if let Some(term) = self.terminals.get_mut(term_idx) {
+                    if line.starts_with("__EXIT__:") {
+                        if let Some(entry) = term.entries.get_mut(entry_idx) {
+                            let code_str = &line["__EXIT__:".len()..];
+                            entry.exit_code = code_str.parse().ok();
+                            entry.is_running = false;
+                        }
+                        continue;
+                    }
+
+                    if let Some(entry) = term.entries.get_mut(entry_idx) {
+                        let formatted = if is_stderr {
+                            format!("[stderr] {}", line)
+                        } else {
+                            line
+                        };
+                        entry.output_lines.push(formatted);
+                        if entry.output_lines.len() > 1000 {
+                            entry.output_lines.drain(..entry.output_lines.len() - 1000);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Execute command in the active terminal
     pub async fn execute(&mut self) {
-        let cmd = self.input.trim().to_string();
-        if cmd.is_empty() {
-            return;
+        let term_idx = self.active_idx;
+        let term = &mut self.terminals[term_idx];
+
+        let cmd = term.input.trim().to_string();
+        if cmd.is_empty() { return; }
+
+        // History
+        if term.history.last().map(|h| h.as_str()) != Some(&cmd) {
+            term.history.push(cmd.clone());
+        }
+        if term.history.len() > 500 {
+            term.history.drain(..term.history.len() - 500);
         }
 
-        if self.history.last().map(|h| h.as_str()) != Some(&cmd) {
-            self.history.push(cmd.clone());
-        }
-        if self.history.len() > 500 {
-            self.history.drain(..self.history.len() - 500);
-        }
+        term.history_index = None;
+        term.input.clear();
+        term.cursor_pos = 0;
+        term.completer.dismiss();
+        term.scroll_offset = 0;
 
-        self.history_index = None;
-        self.input.clear();
-        self.cursor_pos = 0;
-        self.completer.dismiss();
-        self.scroll_offset = 0;
-
-        // Handle "clear" built-in
         if cmd == "clear" {
-            self.entries.clear();
+            term.entries.clear();
             return;
         }
 
-        let profile = self.active_profile().map(|s| s.to_string());
-        let display_cmd = if let Some(ref prof) = profile {
-            format!("[{}] {}", prof, cmd)
-        } else {
-            cmd.clone()
-        };
-
-        let entry_idx = self.entries.len();
-        self.entries.push(CommandEntry {
-            command: display_cmd,
+        let profile = term.profile.clone();
+        let entry_idx = term.entries.len();
+        term.entries.push(CommandEntry {
+            command: cmd.clone(),
             output_lines: Vec::new(),
             exit_code: None,
             is_running: true,
-            _started_at: Instant::now(),
         });
+
+        // Register in global entry map
+        let entry_id = self.next_entry_id;
+        self.next_entry_id += 1;
+        self.entry_map.insert(entry_id, (term_idx, entry_idx));
 
         let tx = self.cmd_tx.clone();
         tokio::spawn(async move {
@@ -276,7 +328,6 @@ impl TerminalState {
                 .stderr(Stdio::piped())
                 .stdin(Stdio::null());
 
-            // Inject AWS_PROFILE env var if a profile is selected
             if let Some(ref prof) = profile {
                 command.env("AWS_PROFILE", prof);
             }
@@ -294,7 +345,7 @@ impl TerminalState {
                             let reader = BufReader::new(out);
                             let mut lines = reader.lines();
                             while let Ok(Some(line)) = lines.next_line().await {
-                                let _ = tx_out.send((entry_idx, line, false));
+                                let _ = tx_out.send((entry_id, line, false));
                             }
                         })
                     });
@@ -305,43 +356,23 @@ impl TerminalState {
                             let reader = BufReader::new(err);
                             let mut lines = reader.lines();
                             while let Ok(Some(line)) = lines.next_line().await {
-                                let _ = tx_err.send((entry_idx, line, true));
+                                let _ = tx_err.send((entry_id, line, true));
                             }
                         })
                     });
 
                     let status = child.wait().await;
-                    if let Some(h) = stdout_handle {
-                        let _ = h.await;
-                    }
-                    if let Some(h) = stderr_handle {
-                        let _ = h.await;
-                    }
+                    if let Some(h) = stdout_handle { let _ = h.await; }
+                    if let Some(h) = stderr_handle { let _ = h.await; }
 
                     let exit_code = status.ok().and_then(|s| s.code()).unwrap_or(-1);
-                    let _ = tx.send((entry_idx, format!("__EXIT__:{}", exit_code), false));
+                    let _ = tx.send((entry_id, format!("__EXIT__:{}", exit_code), false));
                 }
                 Err(e) => {
-                    let _ = tx.send((entry_idx, format!("Failed to spawn: {}", e), true));
-                    let _ = tx.send((entry_idx, "__EXIT__:-1".to_string(), false));
+                    let _ = tx.send((entry_id, format!("Failed to spawn: {}", e), true));
+                    let _ = tx.send((entry_id, "__EXIT__:-1".to_string(), false));
                 }
             }
         });
-    }
-
-    pub fn total_output_lines(&self) -> usize {
-        self.entries
-            .iter()
-            .map(|e| 1 + e.output_lines.len() + 1)
-            .sum()
-    }
-
-    pub fn scroll_up(&mut self, amount: usize) {
-        let max = self.total_output_lines().saturating_sub(1);
-        self.scroll_offset = (self.scroll_offset + amount).min(max);
-    }
-
-    pub fn scroll_down(&mut self, amount: usize) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(amount);
     }
 }

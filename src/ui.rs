@@ -171,20 +171,20 @@ fn draw_terminal(f: &mut Frame, area: Rect, app: &App) {
     let inner = outer.inner(area);
     f.render_widget(outer, area);
 
-    let has_profiles = !ts.live_profiles.is_empty();
+    let has_tabs = ts.terminals.len() > 1;
 
     let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(if has_profiles {
+        .constraints(if has_tabs {
             vec![
-                Constraint::Length(1),  // profile bar
+                Constraint::Length(1),  // terminal tabs
                 Constraint::Min(3),    // output
                 Constraint::Length(1), // separator
                 Constraint::Length(1), // input
             ]
         } else {
             vec![
-                Constraint::Length(0),  // no profile bar
+                Constraint::Length(0),
                 Constraint::Min(3),
                 Constraint::Length(1),
                 Constraint::Length(1),
@@ -192,52 +192,52 @@ fn draw_terminal(f: &mut Frame, area: Rect, app: &App) {
         })
         .split(inner);
 
-    // Profile selector bar
-    if has_profiles {
-        draw_profile_bar(f, sections[0], ts);
+    if has_tabs {
+        draw_terminal_tabs(f, sections[0], ts);
     }
 
-    draw_terminal_output(f, sections[1], ts, app);
+    let term = ts.active();
+    draw_terminal_output(f, sections[1], term, app);
     thin_rule(f, sections[2]);
-    draw_terminal_input(f, sections[3], ts, app);
+    draw_terminal_input(f, sections[3], term, app);
 
-    if ts.completer.visible {
-        draw_suggestions(f, sections[3], inner, ts);
+    if term.completer.visible {
+        draw_suggestions(f, sections[3], inner, term);
     }
 }
 
-fn draw_profile_bar(f: &mut Frame, area: Rect, ts: &crate::terminal::TerminalState) {
+fn draw_terminal_tabs(f: &mut Frame, area: Rect, ts: &crate::terminal::TerminalState) {
     let mut spans: Vec<Span> = vec![
-        Span::styled(format!(" {} profile: ", ICON_KEY), Style::default().fg(FG3)),
+        Span::styled(format!(" {} ", ICON_TERM), Style::default().fg(FG3)),
     ];
 
-    // "default" option (no profile)
-    let default_selected = ts.selected_profile.is_none();
-    spans.push(Span::styled(
-        " default ",
-        if default_selected {
-            Style::default().fg(BG).bg(TEAL).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(FG3)
-        },
-    ));
+    for (i, term) in ts.terminals.iter().enumerate() {
+        let is_active = i == ts.active_idx;
+        let label = term.profile_label();
 
-    // Live profiles
-    for (i, profile) in ts.live_profiles.iter().enumerate() {
-        let is_selected = ts.selected_profile == Some(i);
-        spans.push(Span::styled("  ", Style::default()));
+        // Show running command count
+        let running = term.entries.iter().filter(|e| e.is_running).count();
+        let badge = if running > 0 {
+            format!(" {} ({}) ", label, running)
+        } else {
+            format!(" {} ", label)
+        };
+
         spans.push(Span::styled(
-            format!(" {} ", profile.profile_name),
-            if is_selected {
-                Style::default().fg(BG).bg(GREEN).add_modifier(Modifier::BOLD)
+            badge,
+            if is_active {
+                Style::default().fg(BG).bg(BLUE).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(FG2)
             },
         ));
+        if i < ts.terminals.len() - 1 {
+            spans.push(Span::styled(" ", Style::default()));
+        }
     }
 
     spans.push(Span::styled("    ", Style::default()));
-    spans.push(Span::styled("Ctrl+P/N cycle", Style::default().fg(FG4)));
+    spans.push(Span::styled("Ctrl+←/→ switch", Style::default().fg(FG4)));
 
     f.render_widget(
         Paragraph::new(Line::from(spans)).style(Style::default().bg(BG_BAR)),
@@ -245,16 +245,23 @@ fn draw_profile_bar(f: &mut Frame, area: Rect, ts: &crate::terminal::TerminalSta
     );
 }
 
-fn draw_terminal_output(f: &mut Frame, area: Rect, ts: &crate::terminal::TerminalState, app: &App) {
-    if ts.entries.is_empty() {
+fn draw_terminal_output(f: &mut Frame, area: Rect, term: &crate::terminal::TerminalInstance, app: &App) {
+    if term.entries.is_empty() {
+        let profile_hint = if let Some(ref p) = term.profile {
+            format!("  Profile: {}  ·  Commands run with AWS_PROFILE={}", p, p)
+        } else {
+            "  Default terminal  ·  No profile set".to_string()
+        };
+
         let hints = vec![
             Line::from(""),
             Line::from(Span::styled(
                 "  Type an AWS CLI command and press Enter",
                 Style::default().fg(FG3),
             )),
+            Line::from(Span::styled(profile_hint, Style::default().fg(FG4))),
             Line::from(Span::styled(
-                "  Suggestions appear as you type  ·  Tab to accept  ·  Up/Down for history",
+                "  Tab to accept suggestion  ·  Up/Down for history  ·  PgUp/PgDn to scroll",
                 Style::default().fg(FG4),
             )),
         ];
@@ -264,7 +271,7 @@ fn draw_terminal_output(f: &mut Frame, area: Rect, ts: &crate::terminal::Termina
 
     let mut lines: Vec<Line> = Vec::new();
 
-    for entry in &ts.entries {
+    for entry in &term.entries {
         let status_icon = if entry.is_running {
             Span::styled(format!("{} ", app.spinner()), Style::default().fg(AMBER))
         } else {
@@ -285,13 +292,9 @@ fn draw_terminal_output(f: &mut Frame, area: Rect, ts: &crate::terminal::Termina
         ]));
 
         for line in &entry.output_lines {
-            let color = if line.starts_with("[stderr]") {
-                AMBER
-            } else if line.to_lowercase().contains("error") {
-                RED
-            } else {
-                FG2
-            };
+            let color = if line.starts_with("[stderr]") { AMBER }
+                else if line.to_lowercase().contains("error") { RED }
+                else { FG2 };
             lines.push(Line::from(vec![
                 Span::styled("   ", Style::default()),
                 Span::styled(line.as_str(), Style::default().fg(color)),
@@ -304,7 +307,7 @@ fn draw_terminal_output(f: &mut Frame, area: Rect, ts: &crate::terminal::Termina
     let total = lines.len();
     let visible = area.height as usize;
     let bottom_scroll = if total > visible { total - visible } else { 0 };
-    let scroll = bottom_scroll.saturating_sub(ts.scroll_offset);
+    let scroll = bottom_scroll.saturating_sub(term.scroll_offset);
 
     f.render_widget(
         Paragraph::new(lines).scroll((scroll as u16, 0)),
@@ -322,23 +325,22 @@ fn draw_terminal_output(f: &mut Frame, area: Rect, ts: &crate::terminal::Termina
     }
 }
 
-fn draw_terminal_input(f: &mut Frame, area: Rect, ts: &crate::terminal::TerminalState, app: &App) {
+fn draw_terminal_input(f: &mut Frame, area: Rect, term: &crate::terminal::TerminalInstance, app: &App) {
     let cursor = if app.input_mode == InputMode::TerminalInput && app.cursor_visible {
         "▏"
     } else {
         ""
     };
 
-    let (before, after) = if ts.cursor_pos <= ts.input.len() {
-        ts.input.split_at(ts.cursor_pos)
+    let (before, after) = if term.cursor_pos <= term.input.len() {
+        term.input.split_at(term.cursor_pos)
     } else {
-        (ts.input.as_str(), "")
+        (term.input.as_str(), "")
     };
 
     let bg = if app.input_mode == InputMode::TerminalInput { BG_HL } else { BG };
 
-    // Show active profile in prompt
-    let profile_span = if let Some(prof) = ts.active_profile() {
+    let profile_span = if let Some(ref prof) = term.profile {
         Span::styled(format!(" [{}] ", prof), Style::default().fg(GREEN))
     } else {
         Span::styled(format!(" {} ", ICON_CLOUD), Style::default().fg(TEAL))
@@ -356,8 +358,8 @@ fn draw_terminal_input(f: &mut Frame, area: Rect, ts: &crate::terminal::Terminal
     );
 }
 
-fn draw_suggestions(f: &mut Frame, input_area: Rect, container: Rect, ts: &crate::terminal::TerminalState) {
-    let result = match &ts.completer.cached_result {
+fn draw_suggestions(f: &mut Frame, input_area: Rect, container: Rect, term: &crate::terminal::TerminalInstance) {
+    let result = match &term.completer.cached_result {
         Some(r) if !r.suggestions.is_empty() => r,
         _ => return,
     };
@@ -384,7 +386,7 @@ fn draw_suggestions(f: &mut Frame, input_area: Rect, container: Rect, ts: &crate
         .take(max_visible)
         .enumerate()
         .map(|(i, s)| {
-            let style = if i == ts.completer.selected_index {
+            let style = if i == term.completer.selected_index {
                 Style::default().fg(FG).bg(BG_HL).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(FG2)

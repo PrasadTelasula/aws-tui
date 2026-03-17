@@ -131,13 +131,13 @@ async fn run_app(
         app.refresh_statuses().await;
         app.on_tick();
 
-        // Drive completer (debounced)
-        if app.active_tab == AppTab::Terminal
-            && app.input_mode == InputMode::TerminalInput
-            && app.terminal_state.completer.should_query(&app.terminal_state.input)
-        {
-            let input = app.terminal_state.input.clone();
-            app.terminal_state.completer.query(&input).await;
+        // Drive completer (debounced) on active terminal
+        if app.active_tab == AppTab::Terminal && app.input_mode == InputMode::TerminalInput {
+            let term = app.terminal_state.active();
+            if term.completer.should_query(&term.input) {
+                let input = term.input.clone();
+                app.terminal_state.active_mut().completer.query(&input).await;
+            }
         }
 
         terminal.draw(|f| ui::draw(f, app))?;
@@ -206,71 +206,81 @@ async fn run_app(
 
                 // ── Terminal input mode ──
                 if app.input_mode == InputMode::TerminalInput {
-                    let ts = &mut app.terminal_state;
+                    // Handle terminal switching first (needs &mut terminal_state, not &mut term)
+                    if key.modifiers.contains(KeyModifiers::CONTROL) {
+                        match key.code {
+                            KeyCode::Left => { app.terminal_state.prev_terminal(); continue; }
+                            KeyCode::Right => { app.terminal_state.next_terminal(); continue; }
+                            _ => {}
+                        }
+                    }
+
+                    // Handle Enter (needs &mut terminal_state for execute)
+                    if key.code == KeyCode::Enter {
+                        app.terminal_state.execute().await;
+                        continue;
+                    }
+
+                    // Handle Esc
+                    if key.code == KeyCode::Esc {
+                        app.terminal_state.active_mut().completer.dismiss();
+                        app.input_mode = InputMode::Normal;
+                        continue;
+                    }
+
+                    let term = app.terminal_state.active_mut();
 
                     // Suggestion popup navigation
-                    if ts.completer.visible {
+                    if term.completer.visible {
                         match key.code {
-                            KeyCode::Down => { ts.completer.next(); continue; }
-                            KeyCode::Up => { ts.completer.prev(); continue; }
+                            KeyCode::Down => { term.completer.next(); continue; }
+                            KeyCode::Up => { term.completer.prev(); continue; }
                             KeyCode::Tab => {
-                                if let Some(new_input) = ts.completer.accept_selected(&ts.input) {
-                                    ts.input = new_input;
-                                    ts.cursor_pos = ts.input.len();
-                                    ts.completer.notify_keystroke();
+                                if let Some(new_input) = term.completer.accept_selected(&term.input) {
+                                    term.input = new_input;
+                                    term.cursor_pos = term.input.len();
+                                    term.completer.notify_keystroke();
                                 }
                                 continue;
                             }
-                            KeyCode::Esc => { ts.completer.dismiss(); continue; }
-                            _ => { ts.completer.dismiss(); }
+                            _ => { term.completer.dismiss(); }
                         }
                     }
 
                     match key.code {
-                        KeyCode::Esc => {
-                            app.input_mode = InputMode::Normal;
-                            ts.completer.dismiss();
-                        }
-                        KeyCode::Enter => {
-                            ts.execute().await;
-                        }
-                        KeyCode::Backspace => ts.backspace(),
-                        KeyCode::Delete => ts.delete(),
-                        KeyCode::Left => ts.cursor_left(),
-                        KeyCode::Right => ts.cursor_right(),
-                        KeyCode::Up => ts.history_up(),
-                        KeyCode::Down => ts.history_down(),
+                        KeyCode::Backspace => term.backspace(),
+                        KeyCode::Delete => term.delete(),
+                        KeyCode::Left => term.cursor_left(),
+                        KeyCode::Right => term.cursor_right(),
+                        KeyCode::Up => term.history_up(),
+                        KeyCode::Down => term.history_down(),
+                        KeyCode::PageUp => term.scroll_up(10),
+                        KeyCode::PageDown => term.scroll_down(10),
                         KeyCode::Tab => {
-                            if let Some(new_input) = ts.completer.accept_selected(&ts.input) {
-                                ts.input = new_input;
-                                ts.cursor_pos = ts.input.len();
-                                ts.completer.notify_keystroke();
+                            if let Some(new_input) = term.completer.accept_selected(&term.input) {
+                                term.input = new_input;
+                                term.cursor_pos = term.input.len();
+                                term.completer.notify_keystroke();
                             }
                         }
                         KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            ts.cursor_home();
+                            term.cursor_home();
                         }
                         KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            ts.cursor_end();
+                            term.cursor_end();
                         }
                         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            ts.clear_line();
+                            term.clear_line();
                         }
                         KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            ts.delete_word_backward();
-                        }
-                        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            ts.prev_profile();
-                        }
-                        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            ts.next_profile();
+                            term.delete_word_backward();
                         }
                         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            ts.input.clear();
-                            ts.cursor_pos = 0;
-                            ts.completer.dismiss();
+                            term.input.clear();
+                            term.cursor_pos = 0;
+                            term.completer.dismiss();
                         }
-                        KeyCode::Char(c) => ts.insert_char(c),
+                        KeyCode::Char(c) => term.insert_char(c),
                         _ => {}
                     }
                     continue;
@@ -299,10 +309,16 @@ async fn run_app(
                         app.input_mode = InputMode::TerminalInput;
                     }
                     KeyCode::Up | KeyCode::Char('k') if app.active_tab == AppTab::Terminal => {
-                        app.terminal_state.scroll_up(3);
+                        app.terminal_state.active_mut().scroll_up(3);
                     }
                     KeyCode::Down | KeyCode::Char('j') if app.active_tab == AppTab::Terminal => {
-                        app.terminal_state.scroll_down(3);
+                        app.terminal_state.active_mut().scroll_down(3);
+                    }
+                    KeyCode::Left if app.active_tab == AppTab::Terminal => {
+                        app.terminal_state.prev_terminal();
+                    }
+                    KeyCode::Right if app.active_tab == AppTab::Terminal => {
+                        app.terminal_state.next_terminal();
                     }
 
                     // Sessions tab: normal mode keys

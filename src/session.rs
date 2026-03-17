@@ -1,9 +1,23 @@
+use regex::Regex;
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
+
+/// Wraps the JSON value after `--parameters` in single quotes so the shell
+/// does not interpret curly braces, square brackets, or double quotes.
+fn quote_parameters_for_shell(command: &str) -> String {
+    let re = Regex::new(r"--parameters\s+(\{.+\})").unwrap();
+    if let Some(caps) = re.captures(command) {
+        let json_val = &caps[1];
+        // Replace the bare JSON with a single-quoted version
+        command.replace(json_val, &format!("'{}'", json_val))
+    } else {
+        command.to_string()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionStatus {
@@ -78,9 +92,11 @@ impl SessionManager {
                 .push(format!(">>> Starting: {}", command));
 
             // Parse the command and spawn it via shell
+            // Properly quote JSON parameters for shell execution
+            let shell_command = quote_parameters_for_shell(command);
             let mut child = Command::new("sh")
                 .arg("-c")
-                .arg(command)
+                .arg(&shell_command)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .stdin(Stdio::null())

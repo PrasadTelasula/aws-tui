@@ -356,153 +356,212 @@ impl InstancesState {
         let instance_id = instance.instance_id.clone();
 
         tokio::spawn(async move {
-            // Step 1: send-command
-            let send_output = Command::new("aws")
-                .args([
-                    "ssm", "send-command",
-                    "--instance-ids", &instance_id,
-                    "--document-name", "AWS-RunShellScript",
-                    "--parameters", &format!("commands=[\"{}\"]", cmd.replace('"', "\\\"")),
-                    "--profile", &profile,
-                    "--region", &region,
-                    "--output", "json",
-                ])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .stdin(Stdio::null())
-                .output()
-                .await;
+            // Try send-command first, fall back to start-session if AccessDenied
+            let result = try_send_command(&instance_id, &cmd, &profile, &region).await;
 
-            let command_id = match send_output {
-                Ok(out) if out.status.success() => {
-                    let stdout = String::from_utf8_lossy(&out.stdout);
-                    let parsed: serde_json::Value = match serde_json::from_str(&stdout) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            let _ = tx.send((entry_idx, SsmCommandResult::Error(
-                                format!("Failed to parse send-command response: {}", e),
-                            )));
-                            return;
-                        }
-                    };
-                    match parsed["Command"]["CommandId"].as_str() {
-                        Some(id) => id.to_string(),
-                        None => {
-                            let _ = tx.send((entry_idx, SsmCommandResult::Error(
-                                "No CommandId in response".to_string(),
-                            )));
-                            return;
-                        }
-                    }
+            match result {
+                Ok(lines) => {
+                    let _ = tx.send((entry_idx, SsmCommandResult::Output(lines)));
                 }
-                Ok(out) => {
-                    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                    let msg = if stderr.contains("AccessDeniedException") {
-                        format!(
-                            "{}\n\nRequired IAM permissions:\n  \
-                             - ssm:SendCommand\n  \
-                             - ssm:GetCommandInvocation\n\
-                             Ensure your IAM role/user has these permissions \
-                             for the target instance.",
-                            stderr
-                        )
-                    } else {
-                        stderr
-                    };
-                    let _ = tx.send((entry_idx, SsmCommandResult::Error(msg)));
-                    return;
-                }
-                Err(e) => {
-                    let _ = tx.send((entry_idx, SsmCommandResult::Error(
-                        format!("Failed to run aws cli: {}", e),
-                    )));
-                    return;
-                }
-            };
-
-            // Step 2: poll get-command-invocation until complete
-            for _ in 0..60 {
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-                let get_output = Command::new("aws")
-                    .args([
-                        "ssm", "get-command-invocation",
-                        "--command-id", &command_id,
-                        "--instance-id", &instance_id,
-                        "--profile", &profile,
-                        "--region", &region,
-                        "--output", "json",
-                    ])
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .stdin(Stdio::null())
-                    .output()
-                    .await;
-
-                match get_output {
-                    Ok(out) if out.status.success() => {
-                        let stdout = String::from_utf8_lossy(&out.stdout);
-                        let parsed: serde_json::Value = match serde_json::from_str(&stdout) {
-                            Ok(v) => v,
-                            Err(_) => continue,
-                        };
-
-                        let status = parsed["Status"].as_str().unwrap_or("");
-
-                        if status == "InProgress" || status == "Pending" || status == "Delayed" {
-                            continue;
-                        }
-
-                        let std_out = parsed["StandardOutputContent"]
-                            .as_str().unwrap_or("").to_string();
-                        let std_err = parsed["StandardErrorContent"]
-                            .as_str().unwrap_or("").to_string();
-
-                        let mut lines: Vec<String> = Vec::new();
-                        for line in std_out.lines() {
-                            lines.push(line.to_string());
-                        }
-                        if !std_err.is_empty() {
-                            for line in std_err.lines() {
-                                lines.push(format!("[stderr] {}", line));
-                            }
-                        }
-                        if lines.is_empty() {
-                            lines.push("(no output)".to_string());
-                        }
-
-                        if status == "Success" {
+                Err(err) if err.contains("AccessDeniedException") => {
+                    // Fallback: use start-session (requires only ssm:StartSession)
+                    match try_start_session(&instance_id, &cmd, &profile, &region).await {
+                        Ok(lines) => {
                             let _ = tx.send((entry_idx, SsmCommandResult::Output(lines)));
-                        } else {
-                            let _ = tx.send((entry_idx, SsmCommandResult::Error(
-                                format!("Command {}: {}", status, lines.join("\n")),
-                            )));
                         }
-                        return;
-                    }
-                    Ok(out) => {
-                        let stderr = String::from_utf8_lossy(&out.stderr);
-                        if stderr.contains("InvocationDoesNotExist") {
-                            continue; // Not ready yet
+                        Err(e) => {
+                            let _ = tx.send((entry_idx, SsmCommandResult::Error(e)));
                         }
-                        let _ = tx.send((entry_idx, SsmCommandResult::Error(
-                            stderr.trim().to_string(),
-                        )));
-                        return;
                     }
-                    Err(e) => {
-                        let _ = tx.send((entry_idx, SsmCommandResult::Error(
-                            format!("Failed to get invocation: {}", e),
-                        )));
-                        return;
-                    }
+                }
+                Err(err) => {
+                    let _ = tx.send((entry_idx, SsmCommandResult::Error(err)));
                 }
             }
-
-            let _ = tx.send((entry_idx, SsmCommandResult::Error(
-                "Command timed out after 120s".to_string(),
-            )));
         });
+    }
+}
+
+/// Execute a command via ssm send-command + poll get-command-invocation.
+/// Requires ssm:SendCommand and ssm:GetCommandInvocation permissions.
+async fn try_send_command(
+    instance_id: &str,
+    cmd: &str,
+    profile: &str,
+    region: &str,
+) -> Result<Vec<String>, String> {
+    let send_output = Command::new("aws")
+        .args([
+            "ssm", "send-command",
+            "--instance-ids", instance_id,
+            "--document-name", "AWS-RunShellScript",
+            "--parameters", &format!("commands=[\"{}\"]", cmd.replace('"', "\\\"")),
+            "--profile", profile,
+            "--region", region,
+            "--output", "json",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run aws cli: {}", e))?;
+
+    if !send_output.status.success() {
+        let stderr = String::from_utf8_lossy(&send_output.stderr).trim().to_string();
+        return Err(stderr);
+    }
+
+    let stdout = String::from_utf8_lossy(&send_output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .map_err(|e| format!("Failed to parse send-command response: {}", e))?;
+
+    let command_id = parsed["Command"]["CommandId"]
+        .as_str()
+        .ok_or_else(|| "No CommandId in response".to_string())?
+        .to_string();
+
+    // Poll get-command-invocation until complete
+    for _ in 0..60 {
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+        let get_output = Command::new("aws")
+            .args([
+                "ssm", "get-command-invocation",
+                "--command-id", &command_id,
+                "--instance-id", instance_id,
+                "--profile", profile,
+                "--region", region,
+                "--output", "json",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(Stdio::null())
+            .output()
+            .await;
+
+        match get_output {
+            Ok(out) if out.status.success() => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let parsed: serde_json::Value = match serde_json::from_str(&stdout) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+
+                let status = parsed["Status"].as_str().unwrap_or("");
+
+                if status == "InProgress" || status == "Pending" || status == "Delayed" {
+                    continue;
+                }
+
+                let std_out = parsed["StandardOutputContent"]
+                    .as_str().unwrap_or("").to_string();
+                let std_err = parsed["StandardErrorContent"]
+                    .as_str().unwrap_or("").to_string();
+
+                let mut lines: Vec<String> = Vec::new();
+                for line in std_out.lines() {
+                    lines.push(line.to_string());
+                }
+                if !std_err.is_empty() {
+                    for line in std_err.lines() {
+                        lines.push(format!("[stderr] {}", line));
+                    }
+                }
+                if lines.is_empty() {
+                    lines.push("(no output)".to_string());
+                }
+
+                if status == "Success" {
+                    return Ok(lines);
+                } else {
+                    return Err(format!("Command {}: {}", status, lines.join("\n")));
+                }
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if stderr.contains("InvocationDoesNotExist") {
+                    continue;
+                }
+                return Err(stderr.trim().to_string());
+            }
+            Err(e) => {
+                return Err(format!("Failed to get invocation: {}", e));
+            }
+        }
+    }
+
+    Err("Command timed out after 120s".to_string())
+}
+
+/// Fallback: execute a command via ssm start-session.
+/// Requires only ssm:StartSession permission (more commonly granted).
+async fn try_start_session(
+    instance_id: &str,
+    cmd: &str,
+    profile: &str,
+    region: &str,
+) -> Result<Vec<String>, String> {
+    use tokio::io::AsyncWriteExt;
+
+    let mut child = Command::new("aws")
+        .args([
+            "ssm", "start-session",
+            "--target", instance_id,
+            "--profile", profile,
+            "--region", region,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start session: {}", e))?;
+
+    // Write command + exit to stdin
+    if let Some(mut stdin) = child.stdin.take() {
+        // Small delay to let the session initialize
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        let script = format!("{}\nexit\n", cmd);
+        let _ = stdin.write_all(script.as_bytes()).await;
+        let _ = stdin.flush().await;
+        drop(stdin);
+    }
+
+    // Wait with timeout
+    let output = tokio::time::timeout(
+        tokio::time::Duration::from_secs(30),
+        child.wait_with_output(),
+    )
+    .await
+    .map_err(|_| "start-session timed out after 30s".to_string())?
+    .map_err(|e| format!("Failed to read session output: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    if !stderr.is_empty() && !output.status.success() {
+        return Err(format!(
+            "start-session failed: {}\nHint: Ensure session-manager-plugin is installed.",
+            stderr
+        ));
+    }
+
+    // Parse output: skip the session preamble/postamble lines from SSM
+    let lines: Vec<String> = stdout
+        .lines()
+        .filter(|l| {
+            !l.contains("Starting session with SessionId")
+                && !l.contains("Exiting session with sessionId")
+                && !l.contains("SessionManagerPlugin is not found")
+                && !l.trim().is_empty()
+        })
+        .map(|l| l.to_string())
+        .collect();
+
+    if lines.is_empty() {
+        Ok(vec!["(no output)".to_string()])
+    } else {
+        Ok(lines)
     }
 }
 

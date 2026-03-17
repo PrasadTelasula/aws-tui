@@ -243,12 +243,14 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
             SessionStatus::Stopped  => ("·", FG4),
             SessionStatus::Starting => (app.spinner(), AMBER),
             SessionStatus::Running  => ("●", GREEN),
+            SessionStatus::Connected => ("●", TEAL),
+            SessionStatus::Expired  => ("○", AMBER),
             SessionStatus::Error(_) => ("×", RED),
         };
 
         let name_style = if selected {
             Style::default().fg(FG).add_modifier(Modifier::BOLD)
-        } else if matches!(status, SessionStatus::Running) {
+        } else if matches!(status, SessionStatus::Running | SessionStatus::Connected) {
             Style::default().fg(GREEN)
         } else {
             Style::default().fg(FG2)
@@ -256,10 +258,12 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
 
         let sel_bar = if selected {
             let c = match status {
-                SessionStatus::Running  => GREEN,
-                SessionStatus::Starting => AMBER,
-                SessionStatus::Error(_) => RED,
-                SessionStatus::Stopped  => BLUE,
+                SessionStatus::Running   => GREEN,
+                SessionStatus::Connected => TEAL,
+                SessionStatus::Starting  => AMBER,
+                SessionStatus::Expired   => AMBER,
+                SessionStatus::Error(_)  => RED,
+                SessionStatus::Stopped   => BLUE,
             };
             Span::styled("▌", Style::default().fg(c))
         } else {
@@ -277,7 +281,7 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
             spans.push(Span::styled(format!(" :{}", p), Style::default().fg(TEAL)));
         }
 
-        if matches!(status, SessionStatus::Running) {
+        if matches!(status, SessionStatus::Running | SessionStatus::Connected) {
             if let Some(u) = app.session_uptime(&alias.name) {
                 spans.push(Span::styled(format!("  {}", u), Style::default().fg(FG3)));
             }
@@ -339,17 +343,21 @@ fn draw_right(f: &mut Frame, area: Rect, app: &App) {
 
     // ── Name + status ──
     let (status_text, status_c) = match st {
-        SessionStatus::Stopped  => ("stopped",    FG3),
-        SessionStatus::Starting => ("starting…",  AMBER),
-        SessionStatus::Running  => ("running",    GREEN),
-        SessionStatus::Error(e) => (e.as_str(),   RED),
+        SessionStatus::Stopped   => ("stopped",      FG3),
+        SessionStatus::Starting  => ("starting…",    AMBER),
+        SessionStatus::Running   => ("running",      GREEN),
+        SessionStatus::Connected => ("connected",    TEAL),
+        SessionStatus::Expired   => ("expired",      AMBER),
+        SessionStatus::Error(e)  => (e.as_str(),     RED),
     };
 
     let status_dot = match st {
-        SessionStatus::Stopped  => Span::styled("· ", Style::default().fg(FG4)),
-        SessionStatus::Starting => Span::styled(format!("{} ", app.spinner()), Style::default().fg(AMBER)),
-        SessionStatus::Running  => Span::styled("● ", Style::default().fg(GREEN)),
-        SessionStatus::Error(_) => Span::styled("× ", Style::default().fg(RED)),
+        SessionStatus::Stopped   => Span::styled("· ", Style::default().fg(FG4)),
+        SessionStatus::Starting  => Span::styled(format!("{} ", app.spinner()), Style::default().fg(AMBER)),
+        SessionStatus::Running   => Span::styled("● ", Style::default().fg(GREEN)),
+        SessionStatus::Connected => Span::styled("● ", Style::default().fg(TEAL)),
+        SessionStatus::Expired   => Span::styled("○ ", Style::default().fg(AMBER)),
+        SessionStatus::Error(_)  => Span::styled("× ", Style::default().fg(RED)),
     };
 
     f.render_widget(
@@ -540,9 +548,13 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     spans.push(desc_span(" navigate  "));
 
     match selected_status {
-        SessionStatus::Running | SessionStatus::Starting => {
+        SessionStatus::Running | SessionStatus::Starting | SessionStatus::Connected => {
             spans.push(key_span("s"));
             spans.push(desc_span(" stop  "));
+        }
+        SessionStatus::Expired => {
+            spans.push(key_span("Enter"));
+            spans.push(desc_span(" re-login  "));
         }
         _ => {
             spans.push(key_span("Enter"));

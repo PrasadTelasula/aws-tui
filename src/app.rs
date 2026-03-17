@@ -1,5 +1,5 @@
 use crate::parser::{Alias, AliasKind};
-use crate::session::{SessionManager, SessionStatus};
+use crate::session::{SessionKind, SessionManager, SessionStatus};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -257,9 +257,17 @@ impl App {
         let name = alias.name.clone();
         let command = alias.command.clone();
 
+        let kind = match &alias.kind {
+            AliasKind::SsoLogin { session_name } => SessionKind::SsoLogin {
+                session_name: session_name.clone(),
+            },
+            AliasKind::SsmSession { .. } => SessionKind::SsmSession,
+            AliasKind::Other => SessionKind::Other,
+        };
+
         match self
             .session_manager
-            .start_session(&name, &command, self.output_tx.clone())
+            .start_session(&name, &command, kind, self.output_tx.clone())
             .await
         {
             Ok(()) => {
@@ -324,12 +332,13 @@ impl App {
         let mut count = 0;
         for (i, alias) in self.aliases.iter().enumerate() {
             let status = self.session_manager.get_status(&alias.name).await;
-            if status == SessionStatus::Running || status == SessionStatus::Starting {
-                count += 1;
-            }
-            // If session just stopped, remove start time
-            if status == SessionStatus::Stopped || matches!(status, SessionStatus::Error(_)) {
-                self.session_start_times.remove(&alias.name);
+            match &status {
+                SessionStatus::Running | SessionStatus::Starting | SessionStatus::Connected => {
+                    count += 1;
+                }
+                SessionStatus::Stopped | SessionStatus::Expired | SessionStatus::Error(_) => {
+                    self.session_start_times.remove(&alias.name);
+                }
             }
             self.session_statuses[i] = status;
 

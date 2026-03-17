@@ -120,6 +120,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn key_to_pty_bytes(key: crossterm::event::KeyEvent) -> Option<Vec<u8>> {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    match key.code {
+        KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            match c.to_ascii_lowercase() {
+                'a'..='z' => Some(vec![c.to_ascii_lowercase() as u8 - b'a' + 1]),
+                '[' => Some(vec![27]),
+                '\\' => Some(vec![28]),
+                ']' => Some(vec![29]),
+                _ => None,
+            }
+        }
+        KeyCode::Char(c) => {
+            let mut buf = [0u8; 4];
+            let s = c.encode_utf8(&mut buf);
+            Some(s.as_bytes().to_vec())
+        }
+        KeyCode::Enter => Some(vec![b'\r']),
+        KeyCode::Backspace => Some(vec![127]),
+        KeyCode::Delete => Some(b"\x1b[3~".to_vec()),
+        KeyCode::Esc => Some(vec![27]),
+        KeyCode::Tab => Some(vec![b'\t']),
+        KeyCode::BackTab => Some(b"\x1b[Z".to_vec()),
+        KeyCode::Up => Some(b"\x1b[A".to_vec()),
+        KeyCode::Down => Some(b"\x1b[B".to_vec()),
+        KeyCode::Right => Some(b"\x1b[C".to_vec()),
+        KeyCode::Left => Some(b"\x1b[D".to_vec()),
+        KeyCode::Home => Some(b"\x1b[H".to_vec()),
+        KeyCode::End => Some(b"\x1b[F".to_vec()),
+        KeyCode::PageUp => Some(b"\x1b[5~".to_vec()),
+        KeyCode::PageDown => Some(b"\x1b[6~".to_vec()),
+        _ => None,
+    }
+}
+
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
@@ -141,6 +176,17 @@ async fn run_app(
         }
 
         terminal.draw(|f| ui::draw(f, app))?;
+
+        // Keep PTY size in sync with the actual SSM panel dimensions
+        if app.active_tab == AppTab::Instances {
+            if let Ok(size) = terminal.size() {
+                let inner_w = size.width.saturating_sub(2);
+                let left_w = (inner_w * 36) / 100;
+                let pty_cols = inner_w.saturating_sub(left_w + 1);
+                let pty_rows = size.height.saturating_sub(9);
+                app.instances_state.resize_pty(pty_rows.max(4), pty_cols.max(20));
+            }
+        }
 
         if event::poll(tick_rate)? {
             if let Event::Key(key) = event::read()? {
@@ -305,44 +351,25 @@ async fn run_app(
                     continue;
                 }
 
-                // ── SSM Input mode (Instances tab) ──
+                // ── SSM Input mode (Instances tab) — forward raw bytes to PTY ──
                 if app.input_mode == InputMode::SsmInput {
                     match key.code {
-                        KeyCode::Esc => {
+                        // Ctrl+D: disconnect and exit SSM mode
+                        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.instances_state.disconnect_ssm();
                             app.input_mode = InputMode::Normal;
                         }
+                        // Tab: cycle focus (don't send to PTY)
                         KeyCode::Tab => {
                             app.input_mode = InputMode::Normal;
                             app.instances_state.cycle_focus();
                         }
-                        KeyCode::Enter => {
-                            app.instances_state.send_command().await;
+                        // Everything else: forward as raw bytes to PTY
+                        _ => {
+                            if let Some(bytes) = key_to_pty_bytes(key) {
+                                app.instances_state.write_input(&bytes);
+                            }
                         }
-                        KeyCode::Backspace => {
-                            app.instances_state.backspace();
-                        }
-                        KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                            app.instances_state.scroll_up(3);
-                        }
-                        KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                            app.instances_state.scroll_down(3);
-                        }
-                        KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            app.instances_state.prev_profile();
-                            app.instances_state.fetch_instances();
-                        }
-                        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            app.instances_state.next_profile();
-                            app.instances_state.fetch_instances();
-                        }
-                        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            app.instances_state.disconnect_ssm().await;
-                            app.input_mode = InputMode::Normal;
-                        }
-                        KeyCode::Char(c) => {
-                            app.instances_state.insert_char(c);
-                        }
-                        _ => {}
                     }
                     continue;
                 }
@@ -397,7 +424,7 @@ async fn run_app(
                             match app.instances_state.focus {
                                 instances::InstanceFocus::RegionList => {},
                                 instances::InstanceFocus::InstanceList => app.instances_state.prev_instance(),
-                                instances::InstanceFocus::SsmTerminal => app.instances_state.scroll_up(3),
+                                instances::InstanceFocus::SsmTerminal => {},
                             }
                         }
                     }
@@ -408,7 +435,7 @@ async fn run_app(
                             match app.instances_state.focus {
                                 instances::InstanceFocus::RegionList => {},
                                 instances::InstanceFocus::InstanceList => app.instances_state.next_instance(),
-                                instances::InstanceFocus::SsmTerminal => app.instances_state.scroll_down(3),
+                                instances::InstanceFocus::SsmTerminal => {},
                             }
                         }
                     }
@@ -422,7 +449,11 @@ async fn run_app(
                                     app.instances_state.region_dropdown_open = true;
                                 }
                                 instances::InstanceFocus::InstanceList => {
-                                    app.instances_state.connect_ssm().await;
+                                    let size = terminal.size().unwrap_or_default();
+                                    // Approximate SSM panel: right ~64% width, minus header/footer
+                                    let rows = size.height.saturating_sub(5);
+                                    let cols = (size.width * 64 / 100).saturating_sub(2);
+                                    app.instances_state.connect_ssm(rows.max(10), cols.max(20));
                                     app.instances_state.focus = instances::InstanceFocus::SsmTerminal;
                                     app.input_mode = InputMode::SsmInput;
                                 }

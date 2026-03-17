@@ -12,6 +12,14 @@ use ratatui::{
     Frame,
 };
 
+fn vt100_color(c: vt100::Color) -> Color {
+    match c {
+        vt100::Color::Default => Color::Reset,
+        vt100::Color::Idx(n) => Color::Indexed(n),
+        vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
+    }
+}
+
 // ─── Catppuccin Macchiato palette ───────────────────────────────────
 // Warm, slightly purple-tinted dark — not cold navy, not flat gray.
 const BG: Color = Color::Rgb(36, 39, 58);             // #24273a base
@@ -569,73 +577,91 @@ fn draw_instances(f: &mut Frame, area: Rect, app: &App) {
         .constraints([Constraint::Min(3), Constraint::Length(1)])
         .split(right_area);
 
-    // SSM output
-    if is.ssm_output.is_empty() {
+    // SSM terminal — render vt100 parser screen
+    if let Some(ref parser) = is.pty_parser {
+        let screen = parser.screen();
+        let (screen_rows, screen_cols) = screen.size();
+
+        let mut lines: Vec<Line> = Vec::new();
+        for row in 0..screen_rows {
+            let mut spans: Vec<Span> = Vec::new();
+            let mut cur_text = String::new();
+            let mut cur_style = Style::default();
+
+            for col in 0..screen_cols {
+                let (ch, style) = if let Some(cell) = screen.cell(row, col) {
+                    let content = cell.contents();
+                    let ch = if content.is_empty() { " ".to_string() } else { content.to_string() };
+                    let fg = vt100_color(cell.fgcolor());
+                    let bg = vt100_color(cell.bgcolor());
+                    let mut s = Style::default().fg(fg).bg(bg);
+                    if cell.bold() { s = s.add_modifier(Modifier::BOLD); }
+                    if cell.italic() { s = s.add_modifier(Modifier::ITALIC); }
+                    if cell.underline() { s = s.add_modifier(Modifier::UNDERLINED); }
+                    (ch, s)
+                } else {
+                    (" ".to_string(), Style::default())
+                };
+
+                if style == cur_style {
+                    cur_text.push_str(&ch);
+                } else {
+                    if !cur_text.is_empty() {
+                        spans.push(Span::styled(cur_text.clone(), cur_style));
+                        cur_text.clear();
+                    }
+                    cur_text = ch;
+                    cur_style = style;
+                }
+            }
+            if !cur_text.is_empty() {
+                spans.push(Span::styled(cur_text, cur_style));
+            }
+            lines.push(Line::from(spans));
+        }
+
+        f.render_widget(Paragraph::new(lines), right_split[0]);
+
+        // Show cursor inside the PTY panel
+        let (crow, ccol) = screen.cursor_position();
+        let cx = right_split[0].x + ccol as u16;
+        let cy = right_split[0].y + crow as u16;
+        if cx < right_split[0].x + right_split[0].width
+            && cy < right_split[0].y + right_split[0].height
+        {
+            f.set_cursor_position((cx, cy));
+        }
+    } else {
+        // No active session — show hint
         let status_text = match &is.ssm_status {
             SsmConnectionStatus::Disconnected => "  Select an instance and press Enter to connect",
             SsmConnectionStatus::Connecting => "  Connecting…",
-            SsmConnectionStatus::Connected => "  Connected. Type commands below.",
+            SsmConnectionStatus::Connected => "  Connected",
             SsmConnectionStatus::Error(e) => e.as_str(),
         };
         f.render_widget(
             Paragraph::new(Span::styled(status_text, Style::default().fg(FG3))),
             right_split[0],
         );
-    } else {
-        let lines: Vec<Line> = is.ssm_output.iter().map(|line| {
-            let color = if line.starts_with(">>>") { TEAL }
-                else if line.starts_with("[stderr]") { AMBER }
-                else { FG2 };
-            Line::from(Span::styled(line.as_str(), Style::default().fg(color)))
-        }).collect();
-
-        let total = lines.len();
-        let visible = right_split[0].height as usize;
-        let bottom = if total > visible { total - visible } else { 0 };
-        let scroll = bottom.saturating_sub(is.ssm_scroll_offset);
-
-        f.render_widget(
-            Paragraph::new(lines)
-                .wrap(ratatui::widgets::Wrap { trim: false })
-                .scroll((scroll as u16, 0)),
-            right_split[0],
-        );
-
-        if total > visible {
-            let mut sb = ScrollbarState::new(total).position(scroll);
-            f.render_stateful_widget(
-                Scrollbar::new(ScrollbarOrientation::VerticalRight).style(Style::default().fg(FG4)),
-                right_split[0],
-                &mut sb,
-            );
-        }
     }
 
-    // SSM input
-    let connected = is.ssm_status == SsmConnectionStatus::Connected;
-    let typing = app.input_mode == InputMode::SsmInput;
-    let cursor = if typing && connected && app.cursor_visible { "▏" } else { "" };
-    let (before, after) = if is.ssm_cursor <= is.ssm_input.len() {
-        is.ssm_input.split_at(is.ssm_cursor)
-    } else {
-        (is.ssm_input.as_str(), "")
+    // SSM status bar
+    let status_label = match &is.ssm_status {
+        SsmConnectionStatus::Connected => {
+            if !is.instances.is_empty() {
+                let inst = &is.instances[is.selected_instance.min(is.instances.len().saturating_sub(1))];
+                format!(" [{}]  Ctrl+D: disconnect  F1/F2: switch tab", inst.instance_id)
+            } else {
+                " Connected  Ctrl+D: disconnect".to_string()
+            }
+        }
+        SsmConnectionStatus::Disconnected => "  Enter: connect  Tab: focus".to_string(),
+        SsmConnectionStatus::Connecting => "  Connecting…".to_string(),
+        SsmConnectionStatus::Error(e) => format!(" Error: {}", e),
     };
-
-    let input_bg = if typing { BG_HL } else { BG };
-    let instance_label = if !is.instances.is_empty() {
-        let inst = &is.instances[is.selected_instance.min(is.instances.len().saturating_sub(1))];
-        format!(" [{}] ", inst.instance_id)
-    } else {
-        " $ ".to_string()
-    };
-
+    let status_style = Style::default().bg(BG_BAR).fg(FG3);
     f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(instance_label, Style::default().fg(if connected { GREEN } else { FG4 })),
-            Span::styled(before, Style::default().fg(FG)),
-            Span::styled(cursor, Style::default().fg(BLUE)),
-            Span::styled(after, Style::default().fg(FG)),
-        ])).style(Style::default().bg(input_bg)),
+        Paragraph::new(Span::styled(status_label, status_style)),
         right_split[1],
     );
 

@@ -1,49 +1,6 @@
 use std::process::Stdio;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use tokio::sync::mpsc;
-
-/// Strip ANSI escape sequences and control characters from SSM output.
-/// The session-manager-plugin sends raw terminal output that includes
-/// color codes (\x1b[...m), cursor sequences, OSC sequences (\x1b]...\x07),
-/// and \r carriage returns — all of which scatter text in a ratatui Paragraph.
-fn strip_ansi(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            match chars.peek().copied() {
-                Some('[') => {
-                    // CSI sequence: ESC [ ... <letter>
-                    chars.next();
-                    for nc in chars.by_ref() {
-                        if nc.is_ascii_alphabetic() { break; }
-                    }
-                }
-                Some(']') => {
-                    // OSC sequence: ESC ] ... BEL  or  ESC ] ... ESC '\'
-                    chars.next();
-                    while let Some(nc) = chars.next() {
-                        if nc == '\x07' { break; }
-                        if nc == '\x1b' {
-                            if chars.peek().copied() == Some('\\') { chars.next(); }
-                            break;
-                        }
-                    }
-                }
-                _ => {
-                    // Other 2-byte ESC sequence (e.g. ESC = ESC > ESC ( ESC O ...)
-                    chars.next();
-                }
-            }
-        } else if c == '\r' || (c.is_control() && c != '\n') {
-            // Drop carriage returns and all other control chars (BEL, BS, TAB, etc.)
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
 
 /// AWS regions
 pub const REGIONS: &[&str] = &[
@@ -89,18 +46,14 @@ pub struct InstancesState {
     pub focus: InstanceFocus,
     pub region_dropdown_open: bool,
 
-    // SSM connection (right panel)
+    // SSM connection (right panel) — PTY-based
     pub ssm_status: SsmConnectionStatus,
-    pub ssm_output: Vec<String>,
-    pub ssm_input: String,
-    pub ssm_cursor: usize,
-    pub ssm_scroll_offset: usize,
-    ssm_child_stdin: Option<tokio::process::ChildStdin>,
-    ssm_child: Option<Child>,
-
-    // Channel for SSM output
-    ssm_tx: mpsc::UnboundedSender<String>,
-    ssm_rx: mpsc::UnboundedReceiver<String>,
+    pub pty_parser: Option<vt100::Parser>,
+    pty_writer: Option<Box<dyn std::io::Write + Send>>,
+    pty_master: Option<Box<dyn portable_pty::MasterPty + Send>>,
+    pub pty_size: (u16, u16), // (rows, cols)
+    pty_bytes_tx: mpsc::UnboundedSender<Vec<u8>>,
+    pty_bytes_rx: mpsc::UnboundedReceiver<Vec<u8>>,
 
     // Channel for instance fetch results
     fetch_tx: mpsc::UnboundedSender<Vec<Ec2Instance>>,
@@ -116,7 +69,7 @@ pub enum InstanceFocus {
 
 impl InstancesState {
     pub fn new() -> Self {
-        let (ssm_tx, ssm_rx) = mpsc::unbounded_channel();
+        let (pty_bytes_tx, pty_bytes_rx) = mpsc::unbounded_channel();
         let (fetch_tx, fetch_rx) = mpsc::unbounded_channel();
 
         Self {
@@ -130,14 +83,12 @@ impl InstancesState {
             focus: InstanceFocus::InstanceList,
             region_dropdown_open: false,
             ssm_status: SsmConnectionStatus::Disconnected,
-            ssm_output: Vec::new(),
-            ssm_input: String::new(),
-            ssm_cursor: 0,
-            ssm_scroll_offset: 0,
-            ssm_child_stdin: None,
-            ssm_child: None,
-            ssm_tx,
-            ssm_rx,
+            pty_parser: None,
+            pty_writer: None,
+            pty_master: None,
+            pty_size: (24, 80),
+            pty_bytes_tx,
+            pty_bytes_rx,
             fetch_tx,
             fetch_rx,
         }
@@ -203,28 +154,18 @@ impl InstancesState {
         };
     }
 
-    /// Process incoming data
+    /// Process incoming PTY bytes and instance fetch results
     pub fn tick(&mut self) {
-        // Process SSM output
-        while let Ok(line) = self.ssm_rx.try_recv() {
-            if line == "__SSM_EXIT__" {
+        while let Ok(bytes) = self.pty_bytes_rx.try_recv() {
+            if bytes.is_empty() {
+                // EOF signal — child exited
                 self.ssm_status = SsmConnectionStatus::Disconnected;
-                self.ssm_output.push(">>> Session ended".to_string());
-                self.ssm_child_stdin = None;
+                self.pty_master = None;
+                self.pty_writer = None;
                 continue;
             }
-            if line.starts_with("__SSM_ERROR__:") {
-                let err = line["__SSM_ERROR__:".len()..].to_string();
-                self.ssm_status = SsmConnectionStatus::Error(err.clone());
-                self.ssm_output.push(format!(">>> Error: {}", err));
-                self.ssm_child_stdin = None;
-                continue;
-            }
-            let clean = strip_ansi(&line);
-            if clean.trim().is_empty() { continue; }
-            self.ssm_output.push(clean);
-            if self.ssm_output.len() > 1000 {
-                self.ssm_output.drain(..self.ssm_output.len() - 1000);
+            if let Some(ref mut parser) = self.pty_parser {
+                parser.process(&bytes);
             }
         }
 
@@ -281,14 +222,14 @@ impl InstancesState {
         });
     }
 
-    /// Connect to the selected instance via SSM
-    pub async fn connect_ssm(&mut self) {
+    /// Connect to the selected instance via SSM using a PTY
+    pub fn connect_ssm(&mut self, rows: u16, cols: u16) {
+        // Disconnect any existing session first
+        self.disconnect_ssm();
+
         if self.instances.is_empty() {
             return;
         }
-
-        // Disconnect existing session first
-        self.disconnect_ssm().await;
 
         let instance = &self.instances[self.selected_instance];
         let instance_id = instance.instance_id.clone();
@@ -299,139 +240,107 @@ impl InstancesState {
         let region = self.active_region().to_string();
 
         self.ssm_status = SsmConnectionStatus::Connecting;
-        self.ssm_output.clear();
-        self.ssm_output.push(format!(
-            ">>> Connecting to {} ({}) in {}...",
-            instance.name, instance_id, region
-        ));
 
-        let mut child = match Command::new("aws")
-            .args([
-                "ssm", "start-session",
-                "--target", &instance_id,
-                "--region", &region,
-                "--profile", &profile,
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .stdin(Stdio::piped())
-            .spawn()
-        {
-            Ok(c) => c,
+        let pty_system = portable_pty::native_pty_system();
+        let pair = match pty_system.openpty(portable_pty::PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        }) {
+            Ok(p) => p,
             Err(e) => {
                 self.ssm_status = SsmConnectionStatus::Error(e.to_string());
-                self.ssm_output.push(format!(">>> Failed: {}", e));
                 return;
             }
         };
 
-        let stdin = child.stdin.take();
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
+        let mut cmd = portable_pty::CommandBuilder::new("aws");
+        cmd.args(["ssm", "start-session", "--target", &instance_id, "--region", &region, "--profile", &profile]);
 
-        self.ssm_child_stdin = stdin;
+        let child = match pair.slave.spawn_command(cmd) {
+            Ok(c) => c,
+            Err(e) => {
+                self.ssm_status = SsmConnectionStatus::Error(e.to_string());
+                return;
+            }
+        };
+
+        let writer = match pair.master.take_writer() {
+            Ok(w) => w,
+            Err(e) => {
+                self.ssm_status = SsmConnectionStatus::Error(e.to_string());
+                return;
+            }
+        };
+
+        let reader = match pair.master.try_clone_reader() {
+            Ok(r) => r,
+            Err(e) => {
+                self.ssm_status = SsmConnectionStatus::Error(e.to_string());
+                return;
+            }
+        };
+
+        let tx = self.pty_bytes_tx.clone();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            let mut reader = reader;
+            loop {
+                match std::io::Read::read(&mut reader, &mut buf) {
+                    Ok(0) | Err(_) => {
+                        let _ = tx.send(vec![]); // empty = EOF signal
+                        break;
+                    }
+                    Ok(n) => {
+                        let _ = tx.send(buf[..n].to_vec());
+                    }
+                }
+            }
+            drop(child); // wait for child implicitly
+        });
+
+        self.pty_parser = Some(vt100::Parser::new(rows, cols, 1000));
+        self.pty_writer = Some(writer);
+        self.pty_master = Some(pair.master);
+        self.pty_size = (rows, cols);
         self.ssm_status = SsmConnectionStatus::Connected;
-        self.ssm_output.push(">>> Connected".to_string());
-
-        // Read stdout
-        let tx = self.ssm_tx.clone();
-        if let Some(out) = stdout {
-            let tx_out = tx.clone();
-            tokio::spawn(async move {
-                let reader = BufReader::new(out);
-                let mut lines = reader.lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    let _ = tx_out.send(line);
-                }
-                let _ = tx_out.send("__SSM_EXIT__".to_string());
-            });
-        }
-
-        // Read stderr
-        if let Some(err) = stderr {
-            let tx_err = tx.clone();
-            tokio::spawn(async move {
-                let reader = BufReader::new(err);
-                let mut lines = reader.lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    let _ = tx_err.send(format!("[stderr] {}", line));
-                }
-            });
-        }
-
-        self.ssm_child = Some(child);
     }
 
     /// Disconnect SSM session
-    pub async fn disconnect_ssm(&mut self) {
-        if let Some(ref mut child) = self.ssm_child {
-            let _ = child.kill().await;
-        }
-        self.ssm_child = None;
-        self.ssm_child_stdin = None;
+    pub fn disconnect_ssm(&mut self) {
+        // Dropping the master sends HUP to slave → child exits → reader thread gets EOF
+        self.pty_master = None;
+        self.pty_writer = None;
+        self.pty_parser = None;
         self.ssm_status = SsmConnectionStatus::Disconnected;
     }
 
-    /// Send a command to the SSM session
-    pub async fn send_command(&mut self) {
-        let cmd = self.ssm_input.trim().to_string();
-        if cmd.is_empty() {
+    /// Write raw bytes to the PTY
+    pub fn write_input(&mut self, bytes: &[u8]) {
+        if let Some(ref mut writer) = self.pty_writer {
+            let _ = std::io::Write::write_all(writer, bytes);
+            let _ = std::io::Write::flush(writer);
+        }
+    }
+
+    /// Resize the PTY and parser
+    pub fn resize_pty(&mut self, rows: u16, cols: u16) {
+        if self.pty_size == (rows, cols) {
             return;
         }
-
-        self.ssm_input.clear();
-        self.ssm_cursor = 0;
-        self.ssm_scroll_offset = 0;
-
-        if let Some(ref mut stdin) = self.ssm_child_stdin {
-            let _ = stdin.write_all(format!("{}\n", cmd).as_bytes()).await;
-            let _ = stdin.flush().await;
+        self.pty_size = (rows, cols);
+        if let Some(ref master) = self.pty_master {
+            let _ = master.resize(portable_pty::PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
         }
-    }
-
-    // Input editing for SSM terminal
-    pub fn insert_char(&mut self, c: char) {
-        self.ssm_input.insert(self.ssm_cursor, c);
-        self.ssm_cursor += c.len_utf8();
-    }
-
-    pub fn backspace(&mut self) {
-        if self.ssm_cursor > 0 {
-            let prev = self.ssm_input[..self.ssm_cursor]
-                .char_indices()
-                .last()
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            self.ssm_input.remove(prev);
-            self.ssm_cursor = prev;
+        if let Some(ref mut parser) = self.pty_parser {
+            parser.set_size(rows, cols);
         }
-    }
-
-    pub fn _cursor_left(&mut self) {
-        if self.ssm_cursor > 0 {
-            self.ssm_cursor = self.ssm_input[..self.ssm_cursor]
-                .char_indices()
-                .last()
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-        }
-    }
-
-    pub fn _cursor_right(&mut self) {
-        if self.ssm_cursor < self.ssm_input.len() {
-            if let Some(c) = self.ssm_input[self.ssm_cursor..].chars().next() {
-                self.ssm_cursor += c.len_utf8();
-            }
-        }
-    }
-
-    pub fn scroll_up(&mut self, n: usize) {
-        let max = self.ssm_output.len().saturating_sub(1);
-        self.ssm_scroll_offset = (self.ssm_scroll_offset + n).min(max);
-    }
-
-    pub fn scroll_down(&mut self, n: usize) {
-        self.ssm_scroll_offset = self.ssm_scroll_offset.saturating_sub(n);
     }
 }
 

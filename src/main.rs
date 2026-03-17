@@ -1,5 +1,6 @@
 mod app;
 mod completer;
+mod instances;
 mod parser;
 mod session;
 mod terminal;
@@ -200,6 +201,18 @@ async fn run_app(
                         app.input_mode = InputMode::TerminalInput;
                         continue;
                     }
+                    KeyCode::F(3) => {
+                        app.active_tab = AppTab::Instances;
+                        app.input_mode = InputMode::Normal;
+                        // Auto-fetch instances if we have a profile and none loaded
+                        if !app.instances_state.profiles.is_empty()
+                            && app.instances_state.instances.is_empty()
+                            && !app.instances_state.loading_instances
+                        {
+                            app.instances_state.fetch_instances();
+                        }
+                        continue;
+                    }
                     _ => {}
                 }
 
@@ -325,6 +338,78 @@ async fn run_app(
                     }
                     KeyCode::Char('l') if app.active_tab == AppTab::Terminal => {
                         app.terminal_state.next_terminal();
+                    }
+
+                    // Instances tab: normal mode keys
+                    KeyCode::Tab if app.active_tab == AppTab::Instances => {
+                        app.instances_state.cycle_focus();
+                    }
+                    KeyCode::Up | KeyCode::Char('k') if app.active_tab == AppTab::Instances => {
+                        use crate::instances::InstanceFocus;
+                        match app.instances_state.focus {
+                            InstanceFocus::RegionList => app.instances_state.prev_region(),
+                            InstanceFocus::InstanceList => app.instances_state.prev_instance(),
+                            InstanceFocus::SsmTerminal => app.instances_state.scroll_up(3),
+                        }
+                    }
+                    KeyCode::Down | KeyCode::Char('j') if app.active_tab == AppTab::Instances => {
+                        use crate::instances::InstanceFocus;
+                        match app.instances_state.focus {
+                            InstanceFocus::RegionList => app.instances_state.next_region(),
+                            InstanceFocus::InstanceList => app.instances_state.next_instance(),
+                            InstanceFocus::SsmTerminal => app.instances_state.scroll_down(3),
+                        }
+                    }
+                    KeyCode::Enter if app.active_tab == AppTab::Instances => {
+                        use crate::instances::InstanceFocus;
+                        match app.instances_state.focus {
+                            InstanceFocus::RegionList => {
+                                app.instances_state.fetch_instances();
+                                app.instances_state.focus = InstanceFocus::InstanceList;
+                            }
+                            InstanceFocus::InstanceList => {
+                                app.instances_state.connect_ssm().await;
+                                app.instances_state.focus = InstanceFocus::SsmTerminal;
+                            }
+                            InstanceFocus::SsmTerminal => {
+                                app.instances_state.send_command().await;
+                            }
+                        }
+                    }
+                    KeyCode::Char('r') if app.active_tab == AppTab::Instances => {
+                        app.instances_state.fetch_instances();
+                    }
+                    KeyCode::Char('d') if app.active_tab == AppTab::Instances => {
+                        app.instances_state.disconnect_ssm().await;
+                    }
+                    KeyCode::Char('i') if app.active_tab == AppTab::Instances => {
+                        use crate::instances::InstanceFocus;
+                        app.instances_state.focus = InstanceFocus::SsmTerminal;
+                    }
+                    // SSM terminal text input (when focused on SsmTerminal in instances tab)
+                    KeyCode::Char(c) if app.active_tab == AppTab::Instances => {
+                        use crate::instances::InstanceFocus;
+                        if app.instances_state.focus == InstanceFocus::SsmTerminal {
+                            app.instances_state.insert_char(c);
+                        }
+                    }
+                    KeyCode::Backspace if app.active_tab == AppTab::Instances => {
+                        use crate::instances::InstanceFocus;
+                        if app.instances_state.focus == InstanceFocus::SsmTerminal {
+                            app.instances_state.backspace();
+                        }
+                    }
+                    KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && app.active_tab == AppTab::Instances =>
+                    {
+                        app.instances_state.prev_profile();
+                        app.instances_state.fetch_instances();
+                    }
+                    KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && app.active_tab == AppTab::Instances =>
+                    {
+                        app.instances_state.next_profile();
+                        app.instances_state.fetch_instances();
                     }
 
                     // Sessions tab: normal mode keys

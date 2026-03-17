@@ -1,3 +1,4 @@
+use crate::instances::InstancesState;
 use crate::parser::{Alias, AliasKind};
 use crate::session::{SessionKind, SessionManager, SessionStatus};
 use crate::terminal::TerminalState;
@@ -10,6 +11,7 @@ use tokio::sync::mpsc;
 pub enum AppTab {
     Sessions,
     Terminal,
+    Instances,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -52,6 +54,7 @@ pub struct App {
     pub selected_index: usize,
     pub active_panel: ActivePanel,
     pub input_mode: InputMode,
+    pub instances_state: InstancesState,
     pub search_query: String,
     pub filtered_indices: Vec<usize>,
     pub session_statuses: Vec<SessionStatus>,
@@ -100,6 +103,7 @@ impl App {
             selected_index: 0,
             active_panel: ActivePanel::AliasList,
             input_mode: InputMode::Normal,
+            instances_state: InstancesState::new(),
             search_query: String::new(),
             filtered_indices: Vec::new(),
             session_statuses: statuses,
@@ -167,6 +171,7 @@ impl App {
 
         // Process terminal command output
         self.terminal_state.tick();
+        self.instances_state.tick();
 
         // Clear expired toasts (after 3 seconds)
         if let Some(ref toast) = self.toast {
@@ -431,6 +436,18 @@ impl App {
         }
         self.terminal_state.live_profiles = profiles;
         self.terminal_state.sync_profiles();
+
+        // Sync connected profiles to instances tab
+        let profile_names: Vec<String> = self.terminal_state.live_profiles
+            .iter()
+            .map(|p| p.profile_name.clone())
+            .collect();
+        if self.instances_state.profiles != profile_names {
+            self.instances_state.profiles = profile_names;
+            if self.instances_state.active_profile_idx >= self.instances_state.profiles.len() {
+                self.instances_state.active_profile_idx = 0;
+            }
+        }
     }
 
     pub async fn process_output_messages(&mut self) {

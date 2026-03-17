@@ -66,8 +66,9 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_separator(f, layout[2]);
 
     match app.active_tab {
-        AppTab::Sessions => draw_body(f, layout[3], app),
-        AppTab::Terminal  => draw_terminal(f, layout[3], app),
+        AppTab::Sessions  => draw_body(f, layout[3], app),
+        AppTab::Terminal   => draw_terminal(f, layout[3], app),
+        AppTab::Instances  => draw_instances(f, layout[3], app),
     }
     draw_footer(f, layout[4], app);
 
@@ -120,31 +121,28 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_tab_bar(f: &mut Frame, area: Rect, app: &App) {
-    let s_style = if app.active_tab == AppTab::Sessions {
-        Style::default().fg(BLUE).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(FG3)
+    let tab_style = |tab: AppTab| -> Style {
+        if app.active_tab == tab {
+            Style::default().fg(BLUE).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(FG3)
+        }
     };
-    let t_style = if app.active_tab == AppTab::Terminal {
-        Style::default().fg(BLUE).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(FG3)
+    let bar = |tab: AppTab| -> &str {
+        if app.active_tab == tab { "▎" } else { " " }
     };
 
     let line = Line::from(vec![
-        Span::styled(
-            if app.active_tab == AppTab::Sessions { " ▎" } else { "  " },
-            Style::default().fg(BLUE),
-        ),
-        Span::styled(format!(" {} Sessions ", ICON_PLUG), s_style),
-        Span::styled("   ", Style::default()),
-        Span::styled(
-            if app.active_tab == AppTab::Terminal { "▎" } else { " " },
-            Style::default().fg(BLUE),
-        ),
-        Span::styled(format!(" {} Terminal ", ICON_TERM), t_style),
-        Span::styled("      ", Style::default()),
-        Span::styled("F1/F2 switch tabs", Style::default().fg(FG4)),
+        Span::styled(format!(" {}", bar(AppTab::Sessions)), Style::default().fg(BLUE)),
+        Span::styled(format!(" {} Sessions ", ICON_PLUG), tab_style(AppTab::Sessions)),
+        Span::styled("  ", Style::default()),
+        Span::styled(bar(AppTab::Terminal), Style::default().fg(BLUE)),
+        Span::styled(format!(" {} Terminal ", ICON_TERM), tab_style(AppTab::Terminal)),
+        Span::styled("  ", Style::default()),
+        Span::styled(bar(AppTab::Instances), Style::default().fg(BLUE)),
+        Span::styled(format!(" {} Instances ", ICON_SERVER), tab_style(AppTab::Instances)),
+        Span::styled("    ", Style::default()),
+        Span::styled("F1/F2/F3", Style::default().fg(FG4)),
     ]);
 
     f.render_widget(
@@ -411,6 +409,239 @@ fn draw_suggestions(f: &mut Frame, input_area: Rect, container: Rect, term: &cra
                 .style(Style::default().bg(BG_BAR)),
         ),
         popup,
+    );
+}
+
+// ─── INSTANCES TAB ──────────────────────────────────────────────────
+
+fn draw_instances(f: &mut Frame, area: Rect, app: &App) {
+    use crate::instances::{InstanceFocus, SsmConnectionStatus};
+    let is = &app.instances_state;
+
+    if is.profiles.is_empty() {
+        let outer = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(FG4))
+            .style(Style::default().bg(BG));
+        let inner = outer.inner(area);
+        f.render_widget(outer, area);
+        f.render_widget(
+            Paragraph::new(vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  No active SSO profiles. Connect via the Sessions tab first.",
+                    Style::default().fg(FG3),
+                )),
+            ]),
+            inner,
+        );
+        return;
+    }
+
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(FG4))
+        .style(Style::default().bg(BG));
+    let inner = outer.inner(area);
+    f.render_widget(outer, area);
+
+    // Layout: profile bar (1) | left panel | divider | right panel
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(5)])
+        .split(inner);
+
+    // Profile bar
+    let mut profile_spans: Vec<Span> = vec![
+        Span::styled(format!(" {} ", ICON_KEY), Style::default().fg(FG3)),
+    ];
+    for (i, p) in is.profiles.iter().enumerate() {
+        let selected = i == is.active_profile_idx;
+        profile_spans.push(Span::styled(
+            format!(" {} ", p),
+            if selected {
+                Style::default().fg(BG).bg(GREEN).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(FG3)
+            },
+        ));
+        profile_spans.push(Span::styled(" ", Style::default()));
+    }
+    profile_spans.push(Span::styled(
+        format!("    {} {}", ICON_GLOBE, is.active_region()),
+        Style::default().fg(TEAL),
+    ));
+    profile_spans.push(Span::styled("    Ctrl+H/L profile  Tab focus  r refresh", Style::default().fg(FG4)));
+    f.render_widget(
+        Paragraph::new(Line::from(profile_spans)).style(Style::default().bg(BG_BAR)),
+        rows[0],
+    );
+
+    // Left (regions + instances) | divider | Right (SSM terminal)
+    let left_w = (rows[1].width * 36) / 100;
+    let right_w = rows[1].width.saturating_sub(left_w + 1);
+    let left_area = Rect::new(rows[1].x, rows[1].y, left_w, rows[1].height);
+    let div_area = Rect::new(rows[1].x + left_w, rows[1].y, 1, rows[1].height);
+    let right_area = Rect::new(rows[1].x + left_w + 1, rows[1].y, right_w, rows[1].height);
+
+    // Divider
+    let div_lines: Vec<Line> = (0..div_area.height)
+        .map(|_| Line::from(Span::styled("│", Style::default().fg(FG4))))
+        .collect();
+    f.render_widget(Paragraph::new(div_lines), div_area);
+
+    // Left panel: regions + instances
+    let left_split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(3)])
+        .split(left_area);
+
+    // Region selector (single line)
+    let region_active = is.focus == InstanceFocus::RegionList;
+    let mut region_spans: Vec<Span> = vec![
+        Span::styled(
+            if region_active { " ▸ " } else { "   " },
+            Style::default().fg(BLUE),
+        ),
+    ];
+    // Show 3 regions around current
+    let total_regions = is.regions.len();
+    let start = if is.region_idx > 1 { is.region_idx - 1 } else { 0 };
+    let end = (start + 5).min(total_regions);
+    for i in start..end {
+        let selected = i == is.region_idx;
+        region_spans.push(Span::styled(
+            format!(" {} ", is.regions[i]),
+            if selected {
+                Style::default().fg(BG).bg(TEAL).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(FG3)
+            },
+        ));
+    }
+    if end < total_regions {
+        region_spans.push(Span::styled(" …", Style::default().fg(FG4)));
+    }
+    f.render_widget(Paragraph::new(Line::from(region_spans)), left_split[0]);
+
+    // Instance list
+    let inst_active = is.focus == InstanceFocus::InstanceList;
+    let mut items: Vec<ListItem> = Vec::new();
+
+    if is.loading_instances {
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(format!("  {} loading…", app.spinner()), Style::default().fg(AMBER)),
+        ])));
+    } else if is.instances.is_empty() {
+        items.push(ListItem::new(Line::from(Span::styled(
+            "  no instances",
+            Style::default().fg(FG4),
+        ))));
+    } else {
+        for (i, inst) in is.instances.iter().enumerate() {
+            let selected = i == is.selected_instance;
+            let sel_bar = if selected && inst_active {
+                Span::styled("▌", Style::default().fg(BLUE))
+            } else {
+                Span::styled(" ", Style::default())
+            };
+
+            let name_style = if selected {
+                Style::default().fg(FG).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(FG2)
+            };
+
+            let mut item = ListItem::new(Line::from(vec![
+                sel_bar,
+                Span::styled(format!(" {} ", inst.name), name_style),
+                Span::styled(inst.instance_id.as_str(), Style::default().fg(FG3)),
+                Span::styled(format!("  {}", inst.private_ip), Style::default().fg(FG4)),
+            ]));
+            if selected && inst_active {
+                item = item.style(Style::default().bg(BG_HL));
+            }
+            items.push(item);
+        }
+    }
+    f.render_widget(List::new(items), left_split[1]);
+
+    // Right panel: SSM terminal
+    let ssm_active = is.focus == InstanceFocus::SsmTerminal;
+    let _ssm_border = if ssm_active { BLUE } else { FG4 };
+
+    let right_split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .split(right_area);
+
+    // SSM output
+    if is.ssm_output.is_empty() {
+        let status_text = match &is.ssm_status {
+            SsmConnectionStatus::Disconnected => "  Select an instance and press Enter to connect",
+            SsmConnectionStatus::Connecting => "  Connecting…",
+            SsmConnectionStatus::Connected => "  Connected. Type commands below.",
+            SsmConnectionStatus::Error(e) => e.as_str(),
+        };
+        f.render_widget(
+            Paragraph::new(Span::styled(status_text, Style::default().fg(FG3))),
+            right_split[0],
+        );
+    } else {
+        let lines: Vec<Line> = is.ssm_output.iter().map(|line| {
+            let color = if line.starts_with(">>>") { TEAL }
+                else if line.starts_with("[stderr]") { AMBER }
+                else { FG2 };
+            Line::from(Span::styled(line.as_str(), Style::default().fg(color)))
+        }).collect();
+
+        let total = lines.len();
+        let visible = right_split[0].height as usize;
+        let bottom = if total > visible { total - visible } else { 0 };
+        let scroll = bottom.saturating_sub(is.ssm_scroll_offset);
+
+        f.render_widget(
+            Paragraph::new(lines).scroll((scroll as u16, 0)),
+            right_split[0],
+        );
+
+        if total > visible {
+            let mut sb = ScrollbarState::new(total).position(scroll);
+            f.render_stateful_widget(
+                Scrollbar::new(ScrollbarOrientation::VerticalRight).style(Style::default().fg(FG4)),
+                right_split[0],
+                &mut sb,
+            );
+        }
+    }
+
+    // SSM input
+    let connected = is.ssm_status == SsmConnectionStatus::Connected;
+    let cursor = if ssm_active && connected && app.cursor_visible { "▏" } else { "" };
+    let (before, after) = if is.ssm_cursor <= is.ssm_input.len() {
+        is.ssm_input.split_at(is.ssm_cursor)
+    } else {
+        (is.ssm_input.as_str(), "")
+    };
+
+    let input_bg = if ssm_active { BG_HL } else { BG };
+    let instance_label = if !is.instances.is_empty() {
+        let inst = &is.instances[is.selected_instance.min(is.instances.len().saturating_sub(1))];
+        format!(" [{}] ", inst.instance_id)
+    } else {
+        " $ ".to_string()
+    };
+
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(instance_label, Style::default().fg(if connected { GREEN } else { FG4 })),
+            Span::styled(before, Style::default().fg(FG)),
+            Span::styled(cursor, Style::default().fg(BLUE)),
+            Span::styled(after, Style::default().fg(FG)),
+        ])).style(Style::default().bg(input_bg)),
+        right_split[1],
     );
 }
 
@@ -899,6 +1130,40 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
             spans.push(desc_span(" switch  "));
             spans.push(key_span("/"));
             spans.push(desc_span(" search  "));
+        }
+        AppTab::Instances => {
+            use crate::instances::InstanceFocus;
+            let is = &app.instances_state;
+            match is.focus {
+                InstanceFocus::RegionList => {
+                    spans.push(key_span("↑↓"));
+                    spans.push(desc_span(" region  "));
+                    spans.push(key_span("Enter"));
+                    spans.push(desc_span(" select+fetch  "));
+                    spans.push(key_span("Tab"));
+                    spans.push(desc_span(" focus  "));
+                }
+                InstanceFocus::InstanceList => {
+                    spans.push(key_span("↑↓"));
+                    spans.push(desc_span(" select  "));
+                    spans.push(key_span("Enter"));
+                    spans.push(desc_span(" connect SSM  "));
+                    spans.push(key_span("r"));
+                    spans.push(desc_span(" refresh  "));
+                    spans.push(key_span("Tab"));
+                    spans.push(desc_span(" focus  "));
+                }
+                InstanceFocus::SsmTerminal => {
+                    spans.push(key_span("Enter"));
+                    spans.push(desc_span(" send  "));
+                    spans.push(key_span("S+↑↓"));
+                    spans.push(desc_span(" scroll  "));
+                    spans.push(key_span("d"));
+                    spans.push(desc_span(" disconnect  "));
+                    spans.push(key_span("Tab"));
+                    spans.push(desc_span(" focus  "));
+                }
+            }
         }
         AppTab::Terminal => {
             if app.input_mode == InputMode::TerminalInput {

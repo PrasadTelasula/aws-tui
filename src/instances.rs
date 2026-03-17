@@ -225,10 +225,8 @@ impl InstancesState {
             format!(
                 "tell application \"iTerm2\"\n\
                     tell current session of current window\n\
-                        set newSession to (split vertically with default profile)\n\
+                        set newSession to (split vertically with default profile command \"{}\")\n\
                         tell newSession\n\
-                            delay 0.3\n\
-                            write text \"{}\"\n\
                             set name to \"{}\"\n\
                         end tell\n\
                     end tell\n\

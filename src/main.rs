@@ -206,11 +206,11 @@ async fn run_app(
 
                 // ── Terminal input mode ──
                 if app.input_mode == InputMode::TerminalInput {
-                    // Handle terminal switching first (needs &mut terminal_state, not &mut term)
+                    // Ctrl+H / Ctrl+L: switch terminals (H=left, L=right)
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
                         match key.code {
-                            KeyCode::Left => { app.terminal_state.prev_terminal(); continue; }
-                            KeyCode::Right => { app.terminal_state.next_terminal(); continue; }
+                            KeyCode::Char('h') => { app.terminal_state.prev_terminal(); continue; }
+                            KeyCode::Char('l') => { app.terminal_state.next_terminal(); continue; }
                             _ => {}
                         }
                     }
@@ -314,10 +314,10 @@ async fn run_app(
                     KeyCode::Down | KeyCode::Char('j') if app.active_tab == AppTab::Terminal => {
                         app.terminal_state.active_mut().scroll_down(3);
                     }
-                    KeyCode::Left if app.active_tab == AppTab::Terminal => {
+                    KeyCode::Char('h') if app.active_tab == AppTab::Terminal => {
                         app.terminal_state.prev_terminal();
                     }
-                    KeyCode::Right if app.active_tab == AppTab::Terminal => {
+                    KeyCode::Char('l') if app.active_tab == AppTab::Terminal => {
                         app.terminal_state.next_terminal();
                     }
 

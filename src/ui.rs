@@ -237,7 +237,7 @@ fn draw_terminal_tabs(f: &mut Frame, area: Rect, ts: &crate::terminal::TerminalS
     }
 
     spans.push(Span::styled("    ", Style::default()));
-    spans.push(Span::styled("Ctrl+←/→ switch", Style::default().fg(FG4)));
+    spans.push(Span::styled("Ctrl+H/L switch", Style::default().fg(FG4)));
 
     f.render_widget(
         Paragraph::new(Line::from(spans)).style(Style::default().bg(BG_BAR)),

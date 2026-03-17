@@ -197,7 +197,7 @@ impl InstancesState {
         });
     }
 
-    /// Open SSM session in a native terminal window
+    /// Open SSM session in a native terminal window/split
     pub fn open_ssm_terminal(&mut self) {
         if self.instances.is_empty() {
             return;
@@ -212,45 +212,41 @@ impl InstancesState {
         let region = self.active_region().to_string();
         let name = instance.name.clone();
 
-        // Build the SSM command
         let ssm_cmd = format!(
-            "echo '>>> Connecting to {} ({}) in {}...' && aws ssm start-session --target {} --region {} --profile {}",
-            name, instance_id, region, instance_id, region, profile
+            "aws ssm start-session --target {} --region {} --profile {}",
+            instance_id, region, profile
         );
 
-        // Detect terminal emulator and open a new window/tab
         let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
 
         let script = if term_program == "iTerm.app" {
-            // iTerm2: open new tab
+            // iTerm2: split pane vertically in current tab
             format!(
                 r#"tell application "iTerm2"
-                    tell current window
-                        create tab with default profile
-                        tell current session
-                            write text "{}"
-                        end tell
-                    end tell
-                end tell"#,
-                ssm_cmd.replace('"', "\\\"")
+    tell current session of current window
+        set newSession to (split vertically with default profile)
+        tell newSession
+            write text "printf '\\033]0;SSM: {} ({})\\007' && {}"
+        end tell
+    end tell
+end tell"#,
+                name, instance_id, ssm_cmd
             )
         } else {
-            // Terminal.app or other: open new window
+            // Terminal.app: new window (no split support)
             format!(
                 r#"tell application "Terminal"
-                    activate
-                    do script "{}"
-                end tell"#,
-                ssm_cmd.replace('"', "\\\"")
+    do script "{}"
+    activate
+end tell"#,
+                ssm_cmd
             )
         };
 
-        // Track this session
         if !self.active_sessions.contains(&instance_id) {
             self.active_sessions.push(instance_id);
         }
 
-        // Spawn AppleScript in background
         tokio::spawn(async move {
             let _ = Command::new("osascript")
                 .arg("-e")

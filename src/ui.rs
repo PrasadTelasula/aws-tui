@@ -546,9 +546,16 @@ fn draw_instances(f: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(FG2)
             };
 
+            let ssm_indicator = if inst.ssm_managed {
+                Span::styled(" SSM ", Style::default().fg(GREEN))
+            } else {
+                Span::styled(" --- ", Style::default().fg(FG4))
+            };
+
             let mut item = ListItem::new(Line::from(vec![
                 sel_bar,
                 Span::styled(format!(" {} ", inst.name), name_style),
+                ssm_indicator,
                 Span::styled(inst.instance_id.as_str(), Style::default().fg(FG3)),
                 Span::styled(format!("  {}", inst.private_ip), Style::default().fg(FG4)),
             ]));
@@ -585,7 +592,12 @@ fn draw_instances(f: &mut Frame, area: Rect, app: &App) {
                 Line::from(vec![
                     Span::styled("   ", Style::default()),
                     Span::styled(&inst.private_ip, Style::default().fg(FG3)),
-                    Span::styled(format!("  {}  {}", inst.az, inst.instance_type), Style::default().fg(FG4)),
+                    Span::styled(format!("  {}  {}  ", inst.az, inst.instance_type), Style::default().fg(FG4)),
+                    if inst.ssm_managed {
+                        Span::styled("SSM ✓", Style::default().fg(GREEN))
+                    } else {
+                        Span::styled("SSM ✗", Style::default().fg(RED))
+                    },
                 ]),
                 Line::from(Span::styled(
                     format!("   {}", "─".repeat(right_split[0].width.saturating_sub(4) as usize)),

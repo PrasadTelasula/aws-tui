@@ -17,6 +17,7 @@ pub struct Ec2Instance {
     pub private_ip: String,
     pub instance_type: String,
     pub az: String,
+    pub ssm_managed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -233,6 +234,7 @@ impl InstancesState {
         self.last_error = None;
 
         tokio::spawn(async move {
+            // Step 1: Fetch EC2 instances
             let output = Command::new("aws")
                 .args([
                     "ec2", "describe-instances",
@@ -249,20 +251,52 @@ impl InstancesState {
                 .output()
                 .await;
 
-            match output {
+            let mut instances = match output {
                 Ok(out) if out.status.success() => {
                     let stdout = String::from_utf8_lossy(&out.stdout);
-                    let instances = parse_instances(&stdout);
-                    let _ = tx.send(Ok(instances));
+                    parse_instances(&stdout)
                 }
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
                     let _ = tx.send(Err(stderr));
+                    return;
                 }
                 Err(e) => {
                     let _ = tx.send(Err(format!("Failed to run aws cli: {}", e)));
+                    return;
+                }
+            };
+
+            // Step 2: Check which instances are SSM-managed
+            let ssm_output = Command::new("aws")
+                .args([
+                    "ssm", "describe-instance-information",
+                    "--region", &region,
+                    "--profile", &profile,
+                    "--query", "InstanceInformationList[].InstanceId",
+                    "--output", "json",
+                ])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .stdin(Stdio::null())
+                .output()
+                .await;
+
+            if let Ok(out) = ssm_output {
+                if out.status.success() {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    if let Ok(ids) = serde_json::from_str::<Vec<String>>(&stdout) {
+                        let managed_set: std::collections::HashSet<&str> =
+                            ids.iter().map(|s| s.as_str()).collect();
+                        for inst in &mut instances {
+                            inst.ssm_managed = managed_set.contains(inst.instance_id.as_str());
+                        }
+                    }
                 }
             }
+            // If SSM check fails, instances keep ssm_managed=false (unknown)
+
+            let _ = tx.send(Ok(instances));
         });
     }
 
@@ -275,6 +309,26 @@ impl InstancesState {
             Some(i) => i.clone(),
             None => return,
         };
+
+        if !instance.ssm_managed {
+            self.cmd_input.clear();
+            self.cmd_cursor = 0;
+            self.cmd_scroll_offset = 0;
+            self.cmd_history.push(SsmCommand {
+                command: format!("[{}] {}", instance.name, cmd),
+                _instance_name: instance.name.clone(),
+                output: vec![
+                    "Instance is not managed by SSM.".to_string(),
+                    "Ensure the instance has:".to_string(),
+                    "  1. SSM Agent installed and running".to_string(),
+                    "  2. An IAM instance profile with AmazonSSMManagedInstanceCore policy".to_string(),
+                    "  3. Network connectivity to SSM endpoints (or VPC endpoint)".to_string(),
+                ],
+                status: SsmCommandStatus::Failed,
+            });
+            return;
+        }
+
         let profile = match self.active_profile() {
             Some(p) => p.to_string(),
             None => return,
@@ -343,7 +397,19 @@ impl InstancesState {
                 }
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                    let _ = tx.send((entry_idx, SsmCommandResult::Error(stderr)));
+                    let msg = if stderr.contains("AccessDeniedException") {
+                        format!(
+                            "{}\n\nRequired IAM permissions:\n  \
+                             - ssm:SendCommand\n  \
+                             - ssm:GetCommandInvocation\n\
+                             Ensure your IAM role/user has these permissions \
+                             for the target instance.",
+                            stderr
+                        )
+                    } else {
+                        stderr
+                    };
+                    let _ = tx.send((entry_idx, SsmCommandResult::Error(msg)));
                     return;
                 }
                 Err(e) => {
@@ -454,6 +520,7 @@ fn parse_instances(json: &str) -> Vec<Ec2Instance> {
             private_ip: v["PrivateIp"].as_str().unwrap_or("-").to_string(),
             instance_type: v["Type"].as_str().unwrap_or("-").to_string(),
             az: v["AZ"].as_str().unwrap_or("-").to_string(),
+            ssm_managed: false, // Updated after SSM describe-instance-information check
         })
         .collect();
 

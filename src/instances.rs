@@ -1,7 +1,9 @@
 use std::process::Stdio;
-use tokio::process::Command;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
+/// AWS regions
 pub const REGIONS: &[&str] = &[
     "us-east-1", "us-east-2", "us-west-1", "us-west-2",
     "eu-west-1", "eu-west-2", "eu-west-3", "eu-central-1", "eu-north-1",
@@ -14,92 +16,88 @@ pub const REGIONS: &[&str] = &[
 pub struct Ec2Instance {
     pub instance_id: String,
     pub name: String,
+    pub _state: String,
     pub private_ip: String,
-    pub instance_type: String,
-    pub az: String,
-    pub ssm_managed: bool,
+    pub _instance_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SsmConnectionStatus {
+    Disconnected,
+    Connecting,
+    Connected,
+    Error(String),
+}
+
+pub struct InstancesState {
+    // Profile
+    pub profiles: Vec<String>,
+    pub active_profile_idx: usize,
+
+    // Region
+    pub region_idx: usize,
+    pub regions: Vec<String>,
+
+    // Instances
+    pub instances: Vec<Ec2Instance>,
+    pub selected_instance: usize,
+    pub loading_instances: bool,
+
+    // Focus
+    pub focus: InstanceFocus,
+    pub region_dropdown_open: bool,
+
+    // SSM connection (right panel)
+    pub ssm_status: SsmConnectionStatus,
+    pub ssm_output: Vec<String>,
+    pub ssm_input: String,
+    pub ssm_cursor: usize,
+    pub ssm_scroll_offset: usize,
+    ssm_child_stdin: Option<tokio::process::ChildStdin>,
+    ssm_child: Option<Child>,
+
+    // Channel for SSM output
+    ssm_tx: mpsc::UnboundedSender<String>,
+    ssm_rx: mpsc::UnboundedReceiver<String>,
+
+    // Channel for instance fetch results
+    fetch_tx: mpsc::UnboundedSender<Vec<Ec2Instance>>,
+    fetch_rx: mpsc::UnboundedReceiver<Vec<Ec2Instance>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum InstanceFocus {
     RegionList,
     InstanceList,
-    CommandInput,
-}
-
-/// A command sent via SSM send-command
-#[derive(Debug, Clone)]
-pub struct SsmCommand {
-    pub command: String,
-    pub _instance_name: String,
-    pub output: Vec<String>,
-    pub status: SsmCommandStatus,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum SsmCommandStatus {
-    Running,
-    Success,
-    Failed,
-}
-
-pub struct InstancesState {
-    pub profiles: Vec<String>,
-    pub active_profile_idx: usize,
-
-    pub region_idx: usize,
-    pub regions: Vec<String>,
-    pub region_dropdown_open: bool,
-
-    pub instances: Vec<Ec2Instance>,
-    pub selected_instance: usize,
-    pub loading_instances: bool,
-    pub last_error: Option<String>,
-
-    pub focus: InstanceFocus,
-
-    // Command execution
-    pub cmd_input: String,
-    pub cmd_cursor: usize,
-    pub cmd_history: Vec<SsmCommand>,
-    pub cmd_scroll_offset: usize,
-
-    // Channels
-    fetch_tx: mpsc::UnboundedSender<Result<Vec<Ec2Instance>, String>>,
-    fetch_rx: mpsc::UnboundedReceiver<Result<Vec<Ec2Instance>, String>>,
-    cmd_tx: mpsc::UnboundedSender<(usize, SsmCommandResult)>,
-    cmd_rx: mpsc::UnboundedReceiver<(usize, SsmCommandResult)>,
-}
-
-enum SsmCommandResult {
-    Output(Vec<String>),
-    Error(String),
+    SsmTerminal,
 }
 
 impl InstancesState {
     pub fn new() -> Self {
+        let (ssm_tx, ssm_rx) = mpsc::unbounded_channel();
         let (fetch_tx, fetch_rx) = mpsc::unbounded_channel();
-        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
 
         Self {
             profiles: Vec::new(),
             active_profile_idx: 0,
-            region_idx: 3,
+            region_idx: 3, // us-west-2 default
             regions: REGIONS.iter().map(|s| s.to_string()).collect(),
-            region_dropdown_open: false,
             instances: Vec::new(),
             selected_instance: 0,
             loading_instances: false,
-            last_error: None,
             focus: InstanceFocus::InstanceList,
-            cmd_input: String::new(),
-            cmd_cursor: 0,
-            cmd_history: Vec::new(),
-            cmd_scroll_offset: 0,
+            region_dropdown_open: false,
+            ssm_status: SsmConnectionStatus::Disconnected,
+            ssm_output: Vec::new(),
+            ssm_input: String::new(),
+            ssm_cursor: 0,
+            ssm_scroll_offset: 0,
+            ssm_child_stdin: None,
+            ssm_child: None,
+            ssm_tx,
+            ssm_rx,
             fetch_tx,
             fetch_rx,
-            cmd_tx,
-            cmd_rx,
         }
     }
 
@@ -111,15 +109,12 @@ impl InstancesState {
         &self.regions[self.region_idx]
     }
 
-    pub fn selected_instance(&self) -> Option<&Ec2Instance> {
-        self.instances.get(self.selected_instance)
-    }
-
     pub fn next_profile(&mut self) {
         if !self.profiles.is_empty() {
             self.active_profile_idx = (self.active_profile_idx + 1) % self.profiles.len();
         }
     }
+
     pub fn prev_profile(&mut self) {
         if !self.profiles.is_empty() {
             self.active_profile_idx = if self.active_profile_idx == 0 {
@@ -129,17 +124,25 @@ impl InstancesState {
             };
         }
     }
+
     pub fn next_region(&mut self) {
         self.region_idx = (self.region_idx + 1) % self.regions.len();
     }
+
     pub fn prev_region(&mut self) {
-        self.region_idx = if self.region_idx == 0 { self.regions.len() - 1 } else { self.region_idx - 1 };
+        self.region_idx = if self.region_idx == 0 {
+            self.regions.len() - 1
+        } else {
+            self.region_idx - 1
+        };
     }
+
     pub fn next_instance(&mut self) {
         if !self.instances.is_empty() {
             self.selected_instance = (self.selected_instance + 1) % self.instances.len();
         }
     }
+
     pub fn prev_instance(&mut self) {
         if !self.instances.is_empty() {
             self.selected_instance = if self.selected_instance == 0 {
@@ -153,75 +156,43 @@ impl InstancesState {
     pub fn cycle_focus(&mut self) {
         self.focus = match self.focus {
             InstanceFocus::RegionList => InstanceFocus::InstanceList,
-            InstanceFocus::InstanceList => InstanceFocus::CommandInput,
-            InstanceFocus::CommandInput => InstanceFocus::RegionList,
+            InstanceFocus::InstanceList => InstanceFocus::SsmTerminal,
+            InstanceFocus::SsmTerminal => InstanceFocus::RegionList,
         };
     }
 
-    // Input editing
-    pub fn insert_char(&mut self, c: char) {
-        self.cmd_input.insert(self.cmd_cursor, c);
-        self.cmd_cursor += c.len_utf8();
-    }
-    pub fn backspace(&mut self) {
-        if self.cmd_cursor > 0 {
-            let prev = self.cmd_input[..self.cmd_cursor]
-                .char_indices().last().map(|(i, _)| i).unwrap_or(0);
-            self.cmd_input.remove(prev);
-            self.cmd_cursor = prev;
-        }
-    }
-    pub fn clear_input(&mut self) {
-        self.cmd_input.clear();
-        self.cmd_cursor = 0;
-    }
-
-    pub fn scroll_up(&mut self, n: usize) {
-        let total = self.total_output_lines();
-        self.cmd_scroll_offset = (self.cmd_scroll_offset + n).min(total.saturating_sub(1));
-    }
-    pub fn scroll_down(&mut self, n: usize) {
-        self.cmd_scroll_offset = self.cmd_scroll_offset.saturating_sub(n);
-    }
-
-    pub fn total_output_lines(&self) -> usize {
-        self.cmd_history.iter().map(|c| 1 + c.output.len() + 1).sum()
-    }
-
+    /// Process incoming data
     pub fn tick(&mut self) {
-        // Fetch results
-        while let Ok(result) = self.fetch_rx.try_recv() {
-            self.loading_instances = false;
-            match result {
-                Ok(instances) => {
-                    self.instances = instances;
-                    self.selected_instance = 0;
-                    self.last_error = None;
-                }
-                Err(e) => {
-                    self.instances.clear();
-                    self.last_error = Some(e);
-                }
+        // Process SSM output
+        while let Ok(line) = self.ssm_rx.try_recv() {
+            if line == "__SSM_EXIT__" {
+                self.ssm_status = SsmConnectionStatus::Disconnected;
+                self.ssm_output.push(">>> Session ended".to_string());
+                self.ssm_child_stdin = None;
+                continue;
+            }
+            if line.starts_with("__SSM_ERROR__:") {
+                let err = line["__SSM_ERROR__:".len()..].to_string();
+                self.ssm_status = SsmConnectionStatus::Error(err.clone());
+                self.ssm_output.push(format!(">>> Error: {}", err));
+                self.ssm_child_stdin = None;
+                continue;
+            }
+            self.ssm_output.push(line);
+            if self.ssm_output.len() > 1000 {
+                self.ssm_output.drain(..self.ssm_output.len() - 1000);
             }
         }
 
-        // Command results
-        while let Ok((idx, result)) = self.cmd_rx.try_recv() {
-            if let Some(entry) = self.cmd_history.get_mut(idx) {
-                match result {
-                    SsmCommandResult::Output(lines) => {
-                        entry.output = lines;
-                        entry.status = SsmCommandStatus::Success;
-                    }
-                    SsmCommandResult::Error(e) => {
-                        entry.output = vec![e];
-                        entry.status = SsmCommandStatus::Failed;
-                    }
-                }
-            }
+        // Process fetch results
+        while let Ok(instances) = self.fetch_rx.try_recv() {
+            self.instances = instances;
+            self.selected_instance = 0;
+            self.loading_instances = false;
         }
     }
 
+    /// Fetch instances for the current profile + region
     pub fn fetch_instances(&mut self) {
         let profile = match self.active_profile() {
             Some(p) => p.to_string(),
@@ -231,18 +202,16 @@ impl InstancesState {
         let tx = self.fetch_tx.clone();
 
         self.loading_instances = true;
-        self.last_error = None;
+        self.instances.clear();
 
         tokio::spawn(async move {
-            // Step 1: Fetch EC2 instances
             let output = Command::new("aws")
                 .args([
                     "ec2", "describe-instances",
                     "--region", &region,
                     "--profile", &profile,
                     "--filters", "Name=instance-state-name,Values=running",
-                    "--query",
-                    "Reservations[].Instances[].{InstanceId:InstanceId,Name:Tags[?Key==`Name`]|[0].Value,PrivateIp:PrivateIpAddress,Type:InstanceType,AZ:Placement.AvailabilityZone}",
+                    "--query", "Reservations[].Instances[].{InstanceId:InstanceId,Name:Tags[?Key==`Name`]|[0].Value,State:State.Name,PrivateIp:PrivateIpAddress,Type:InstanceType}",
                     "--output", "json",
                 ])
                 .stdout(Stdio::piped())
@@ -251,323 +220,174 @@ impl InstancesState {
                 .output()
                 .await;
 
-            let mut instances = match output {
+            let instances = match output {
                 Ok(out) if out.status.success() => {
                     let stdout = String::from_utf8_lossy(&out.stdout);
                     parse_instances(&stdout)
                 }
                 Ok(out) => {
-                    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                    let _ = tx.send(Err(stderr));
-                    return;
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    eprintln!("EC2 error: {}", stderr);
+                    Vec::new()
                 }
-                Err(e) => {
-                    let _ = tx.send(Err(format!("Failed to run aws cli: {}", e)));
-                    return;
-                }
+                Err(_) => Vec::new(),
             };
 
-            // Step 2: Check which instances are SSM-managed
-            let ssm_output = Command::new("aws")
-                .args([
-                    "ssm", "describe-instance-information",
-                    "--region", &region,
-                    "--profile", &profile,
-                    "--query", "InstanceInformationList[].InstanceId",
-                    "--output", "json",
-                ])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .stdin(Stdio::null())
-                .output()
-                .await;
-
-            if let Ok(out) = ssm_output {
-                if out.status.success() {
-                    let stdout = String::from_utf8_lossy(&out.stdout);
-                    if let Ok(ids) = serde_json::from_str::<Vec<String>>(&stdout) {
-                        let managed_set: std::collections::HashSet<&str> =
-                            ids.iter().map(|s| s.as_str()).collect();
-                        for inst in &mut instances {
-                            inst.ssm_managed = managed_set.contains(inst.instance_id.as_str());
-                        }
-                    }
-                }
-            }
-            // If SSM check fails, instances keep ssm_managed=false (unknown)
-
-            let _ = tx.send(Ok(instances));
+            let _ = tx.send(instances);
         });
     }
 
-    /// Execute a command on the selected instance via SSM send-command
-    pub fn execute_command(&mut self) {
-        let cmd = self.cmd_input.trim().to_string();
-        if cmd.is_empty() { return; }
-
-        let instance = match self.selected_instance() {
-            Some(i) => i.clone(),
-            None => return,
-        };
-
-        if !instance.ssm_managed {
-            self.cmd_input.clear();
-            self.cmd_cursor = 0;
-            self.cmd_scroll_offset = 0;
-            self.cmd_history.push(SsmCommand {
-                command: format!("[{}] {}", instance.name, cmd),
-                _instance_name: instance.name.clone(),
-                output: vec![
-                    "Instance is not managed by SSM.".to_string(),
-                    "Ensure the instance has:".to_string(),
-                    "  1. SSM Agent installed and running".to_string(),
-                    "  2. An IAM instance profile with AmazonSSMManagedInstanceCore policy".to_string(),
-                    "  3. Network connectivity to SSM endpoints (or VPC endpoint)".to_string(),
-                ],
-                status: SsmCommandStatus::Failed,
-            });
+    /// Connect to the selected instance via SSM
+    pub async fn connect_ssm(&mut self) {
+        if self.instances.is_empty() {
             return;
         }
 
+        // Disconnect existing session first
+        self.disconnect_ssm().await;
+
+        let instance = &self.instances[self.selected_instance];
+        let instance_id = instance.instance_id.clone();
         let profile = match self.active_profile() {
             Some(p) => p.to_string(),
             None => return,
         };
         let region = self.active_region().to_string();
 
-        self.cmd_input.clear();
-        self.cmd_cursor = 0;
-        self.cmd_scroll_offset = 0;
+        self.ssm_status = SsmConnectionStatus::Connecting;
+        self.ssm_output.clear();
+        self.ssm_output.push(format!(
+            ">>> Connecting to {} ({}) in {}...",
+            instance.name, instance_id, region
+        ));
 
-        if cmd == "clear" {
-            self.cmd_history.clear();
-            return;
-        }
-
-        let entry_idx = self.cmd_history.len();
-        self.cmd_history.push(SsmCommand {
-            command: format!("[{}] {}", instance.name, cmd),
-            _instance_name: instance.name.clone(),
-            output: vec!["running…".to_string()],
-            status: SsmCommandStatus::Running,
-        });
-
-        let tx = self.cmd_tx.clone();
-        let instance_id = instance.instance_id.clone();
-
-        tokio::spawn(async move {
-            // Try send-command first, fall back to start-session if AccessDenied
-            let result = try_send_command(&instance_id, &cmd, &profile, &region).await;
-
-            match result {
-                Ok(lines) => {
-                    let _ = tx.send((entry_idx, SsmCommandResult::Output(lines)));
-                }
-                Err(err) if err.contains("AccessDeniedException") => {
-                    // Fallback: use start-session (requires only ssm:StartSession)
-                    match try_start_session(&instance_id, &cmd, &profile, &region).await {
-                        Ok(lines) => {
-                            let _ = tx.send((entry_idx, SsmCommandResult::Output(lines)));
-                        }
-                        Err(e) => {
-                            let _ = tx.send((entry_idx, SsmCommandResult::Error(e)));
-                        }
-                    }
-                }
-                Err(err) => {
-                    let _ = tx.send((entry_idx, SsmCommandResult::Error(err)));
-                }
-            }
-        });
-    }
-}
-
-/// Execute a command via ssm send-command + poll get-command-invocation.
-/// Requires ssm:SendCommand and ssm:GetCommandInvocation permissions.
-async fn try_send_command(
-    instance_id: &str,
-    cmd: &str,
-    profile: &str,
-    region: &str,
-) -> Result<Vec<String>, String> {
-    let send_output = Command::new("aws")
-        .args([
-            "ssm", "send-command",
-            "--instance-ids", instance_id,
-            "--document-name", "AWS-RunShellScript",
-            "--parameters", &format!("commands=[\"{}\"]", cmd.replace('"', "\\\"")),
-            "--profile", profile,
-            "--region", region,
-            "--output", "json",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .stdin(Stdio::null())
-        .output()
-        .await
-        .map_err(|e| format!("Failed to run aws cli: {}", e))?;
-
-    if !send_output.status.success() {
-        let stderr = String::from_utf8_lossy(&send_output.stderr).trim().to_string();
-        return Err(stderr);
-    }
-
-    let stdout = String::from_utf8_lossy(&send_output.stdout);
-    let parsed: serde_json::Value = serde_json::from_str(&stdout)
-        .map_err(|e| format!("Failed to parse send-command response: {}", e))?;
-
-    let command_id = parsed["Command"]["CommandId"]
-        .as_str()
-        .ok_or_else(|| "No CommandId in response".to_string())?
-        .to_string();
-
-    // Poll get-command-invocation until complete
-    for _ in 0..60 {
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-        let get_output = Command::new("aws")
+        let mut child = match Command::new("aws")
             .args([
-                "ssm", "get-command-invocation",
-                "--command-id", &command_id,
-                "--instance-id", instance_id,
-                "--profile", profile,
-                "--region", region,
-                "--output", "json",
+                "ssm", "start-session",
+                "--target", &instance_id,
+                "--region", &region,
+                "--profile", &profile,
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .stdin(Stdio::null())
-            .output()
-            .await;
-
-        match get_output {
-            Ok(out) if out.status.success() => {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                let parsed: serde_json::Value = match serde_json::from_str(&stdout) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-
-                let status = parsed["Status"].as_str().unwrap_or("");
-
-                if status == "InProgress" || status == "Pending" || status == "Delayed" {
-                    continue;
-                }
-
-                let std_out = parsed["StandardOutputContent"]
-                    .as_str().unwrap_or("").to_string();
-                let std_err = parsed["StandardErrorContent"]
-                    .as_str().unwrap_or("").to_string();
-
-                let mut lines: Vec<String> = Vec::new();
-                for line in std_out.lines() {
-                    lines.push(line.to_string());
-                }
-                if !std_err.is_empty() {
-                    for line in std_err.lines() {
-                        lines.push(format!("[stderr] {}", line));
-                    }
-                }
-                if lines.is_empty() {
-                    lines.push("(no output)".to_string());
-                }
-
-                if status == "Success" {
-                    return Ok(lines);
-                } else {
-                    return Err(format!("Command {}: {}", status, lines.join("\n")));
-                }
-            }
-            Ok(out) => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                if stderr.contains("InvocationDoesNotExist") {
-                    continue;
-                }
-                return Err(stderr.trim().to_string());
-            }
+            .stdin(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
             Err(e) => {
-                return Err(format!("Failed to get invocation: {}", e));
+                self.ssm_status = SsmConnectionStatus::Error(e.to_string());
+                self.ssm_output.push(format!(">>> Failed: {}", e));
+                return;
+            }
+        };
+
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        self.ssm_child_stdin = stdin;
+        self.ssm_status = SsmConnectionStatus::Connected;
+        self.ssm_output.push(">>> Connected".to_string());
+
+        // Read stdout
+        let tx = self.ssm_tx.clone();
+        if let Some(out) = stdout {
+            let tx_out = tx.clone();
+            tokio::spawn(async move {
+                let reader = BufReader::new(out);
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let _ = tx_out.send(line);
+                }
+                let _ = tx_out.send("__SSM_EXIT__".to_string());
+            });
+        }
+
+        // Read stderr
+        if let Some(err) = stderr {
+            let tx_err = tx.clone();
+            tokio::spawn(async move {
+                let reader = BufReader::new(err);
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let _ = tx_err.send(format!("[stderr] {}", line));
+                }
+            });
+        }
+
+        self.ssm_child = Some(child);
+    }
+
+    /// Disconnect SSM session
+    pub async fn disconnect_ssm(&mut self) {
+        if let Some(ref mut child) = self.ssm_child {
+            let _ = child.kill().await;
+        }
+        self.ssm_child = None;
+        self.ssm_child_stdin = None;
+        self.ssm_status = SsmConnectionStatus::Disconnected;
+    }
+
+    /// Send a command to the SSM session
+    pub async fn send_command(&mut self) {
+        let cmd = self.ssm_input.trim().to_string();
+        if cmd.is_empty() {
+            return;
+        }
+
+        self.ssm_input.clear();
+        self.ssm_cursor = 0;
+        self.ssm_scroll_offset = 0;
+
+        if let Some(ref mut stdin) = self.ssm_child_stdin {
+            let _ = stdin.write_all(format!("{}\n", cmd).as_bytes()).await;
+            let _ = stdin.flush().await;
+        }
+    }
+
+    // Input editing for SSM terminal
+    pub fn insert_char(&mut self, c: char) {
+        self.ssm_input.insert(self.ssm_cursor, c);
+        self.ssm_cursor += c.len_utf8();
+    }
+
+    pub fn backspace(&mut self) {
+        if self.ssm_cursor > 0 {
+            let prev = self.ssm_input[..self.ssm_cursor]
+                .char_indices()
+                .last()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            self.ssm_input.remove(prev);
+            self.ssm_cursor = prev;
+        }
+    }
+
+    pub fn _cursor_left(&mut self) {
+        if self.ssm_cursor > 0 {
+            self.ssm_cursor = self.ssm_input[..self.ssm_cursor]
+                .char_indices()
+                .last()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+        }
+    }
+
+    pub fn _cursor_right(&mut self) {
+        if self.ssm_cursor < self.ssm_input.len() {
+            if let Some(c) = self.ssm_input[self.ssm_cursor..].chars().next() {
+                self.ssm_cursor += c.len_utf8();
             }
         }
     }
 
-    Err("Command timed out after 120s".to_string())
-}
-
-/// Fallback: execute a command via ssm start-session.
-/// Requires only ssm:StartSession permission (more commonly granted).
-async fn try_start_session(
-    instance_id: &str,
-    cmd: &str,
-    profile: &str,
-    region: &str,
-) -> Result<Vec<String>, String> {
-    use tokio::io::AsyncWriteExt;
-
-    let mut child = Command::new("aws")
-        .args([
-            "ssm", "start-session",
-            "--target", instance_id,
-            "--profile", profile,
-            "--region", region,
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to start session: {}", e))?;
-
-    // Write command + exit to stdin after session initializes
-    if let Some(mut stdin) = child.stdin.take() {
-        // Wait for session-manager-plugin to complete its WebSocket handshake
-        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-        let script = format!("{}\nexit\n", cmd);
-        stdin
-            .write_all(script.as_bytes())
-            .await
-            .map_err(|e| format!("Failed to write to session stdin: {}", e))?;
-        stdin
-            .flush()
-            .await
-            .map_err(|e| format!("Failed to flush session stdin: {}", e))?;
-        drop(stdin);
+    pub fn scroll_up(&mut self, n: usize) {
+        let max = self.ssm_output.len().saturating_sub(1);
+        self.ssm_scroll_offset = (self.ssm_scroll_offset + n).min(max);
     }
 
-    // Wait with timeout
-    let output = tokio::time::timeout(
-        tokio::time::Duration::from_secs(30),
-        child.wait_with_output(),
-    )
-    .await
-    .map_err(|_| "start-session timed out after 30s".to_string())?
-    .map_err(|e| format!("Failed to read session output: {}", e))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-
-    if !stderr.is_empty() && !output.status.success() {
-        return Err(format!(
-            "start-session failed: {}\nHint: Ensure session-manager-plugin is installed.",
-            stderr
-        ));
-    }
-
-    // Parse output: skip the session preamble/postamble lines from SSM
-    let lines: Vec<String> = stdout
-        .lines()
-        .filter(|l| {
-            !l.contains("Starting session with SessionId")
-                && !l.contains("Exiting session with sessionId")
-                && !l.contains("SessionManagerPlugin is not found")
-                && !l.trim().is_empty()
-        })
-        .map(|l| l.to_string())
-        .collect();
-
-    if lines.is_empty() {
-        Ok(vec!["(no output)".to_string()])
-    } else {
-        Ok(lines)
+    pub fn scroll_down(&mut self, n: usize) {
+        self.ssm_scroll_offset = self.ssm_scroll_offset.saturating_sub(n);
     }
 }
 
@@ -577,18 +397,14 @@ fn parse_instances(json: &str) -> Vec<Ec2Instance> {
         Err(_) => return Vec::new(),
     };
 
-    let mut instances: Vec<Ec2Instance> = parsed
+    parsed
         .iter()
         .map(|v| Ec2Instance {
             instance_id: v["InstanceId"].as_str().unwrap_or("-").to_string(),
             name: v["Name"].as_str().unwrap_or("(no name)").to_string(),
+            _state: v["State"].as_str().unwrap_or("-").to_string(),
             private_ip: v["PrivateIp"].as_str().unwrap_or("-").to_string(),
-            instance_type: v["Type"].as_str().unwrap_or("-").to_string(),
-            az: v["AZ"].as_str().unwrap_or("-").to_string(),
-            ssm_managed: false, // Updated after SSM describe-instance-information check
+            _instance_type: v["Type"].as_str().unwrap_or("-").to_string(),
         })
-        .collect();
-
-    instances.sort_by(|a, b| a.name.cmp(&b.name));
-    instances
+        .collect()
 }

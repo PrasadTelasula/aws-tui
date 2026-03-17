@@ -220,25 +220,27 @@ impl InstancesState {
         let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
 
         let script = if term_program == "iTerm.app" {
-            // iTerm2: split pane vertically in current tab
+            // iTerm2: split pane vertically, set session name, run SSM
+            let set_name = format!("SSM: {} ({})", name, instance_id);
             format!(
-                r#"tell application "iTerm2"
-    tell current session of current window
-        set newSession to (split vertically with default profile)
-        tell newSession
-            write text "printf '\\033]0;SSM: {} ({})\\007' && {}"
-        end tell
-    end tell
-end tell"#,
-                name, instance_id, ssm_cmd
+                "tell application \"iTerm2\"\n\
+                    tell current session of current window\n\
+                        set newSession to (split vertically with default profile)\n\
+                        tell newSession\n\
+                            set name to \"{}\"\n\
+                            write text \"{}\"\n\
+                        end tell\n\
+                    end tell\n\
+                end tell",
+                set_name, ssm_cmd
             )
         } else {
-            // Terminal.app: new window (no split support)
+            // Terminal.app: new window
             format!(
-                r#"tell application "Terminal"
-    do script "{}"
-    activate
-end tell"#,
+                "tell application \"Terminal\"\n\
+                    do script \"{}\"\n\
+                    activate\n\
+                end tell",
                 ssm_cmd
             )
         };

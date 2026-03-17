@@ -113,6 +113,39 @@ impl App {
         }
     }
 
+    /// Check which SSO sessions are already authenticated on startup.
+    pub async fn check_existing_sessions(&mut self) {
+        let sso_aliases: Vec<(String, String)> = self
+            .aliases
+            .iter()
+            .filter_map(|a| {
+                if let AliasKind::SsoLogin { session_name } = &a.kind {
+                    Some((a.name.clone(), session_name.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if sso_aliases.is_empty() {
+            return;
+        }
+
+        self.session_manager
+            .check_existing_sso_sessions(&sso_aliases)
+            .await;
+
+        // Update statuses from what the session manager found
+        for (i, alias) in self.aliases.iter().enumerate() {
+            let status = self.session_manager.get_status(&alias.name).await;
+            if status == SessionStatus::Connected {
+                self.session_statuses[i] = status;
+                self.session_start_times
+                    .insert(alias.name.clone(), Instant::now());
+            }
+        }
+    }
+
     pub fn on_tick(&mut self) {
         self.tick += 1;
         self.spinner_frame = (self.tick as usize / 2) % SPINNER_FRAMES.len();

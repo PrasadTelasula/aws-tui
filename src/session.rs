@@ -319,6 +319,59 @@ impl SessionManager {
             let _ = self.stop_session(&name).await;
         }
     }
+
+    /// On startup: check which SSO sessions are already authenticated.
+    /// For each SSO alias, resolve its profile and run sts get-caller-identity.
+    /// If valid, create a session in Connected state and start the liveness watcher.
+    pub async fn check_existing_sso_sessions(
+        &mut self,
+        aliases: &[(String, String)], // (alias_name, sso_session_name)
+    ) {
+        for (alias_name, sso_session_name) in aliases {
+            let profile = match resolve_profile_for_sso_session(sso_session_name) {
+                Some(p) => p,
+                None => continue,
+            };
+
+            let result = check_sts_identity(&profile).await;
+
+            match result {
+                StsCheckResult::Valid { account, arn } => {
+                    let kind = SessionKind::SsoLogin {
+                        session_name: sso_session_name.clone(),
+                    };
+                    let session = Arc::new(Mutex::new(Session::new(kind)));
+
+                    {
+                        let mut s = session.lock().await;
+                        s.status = SessionStatus::Connected;
+                        s.sso_profile = Some(profile.clone());
+                        s.token_expires_at = Some(format!("account: {}", account));
+                        s.output_lines.push(format!(
+                            ">>> Existing SSO session detected (profile: {})",
+                            profile
+                        ));
+                        s.output_lines.push(format!(
+                            ">>> Session verified — {} ({})",
+                            arn, account
+                        ));
+                    }
+
+                    // Start liveness watcher
+                    let sess_clone = session.clone();
+                    let prof_clone = profile.clone();
+                    tokio::spawn(async move {
+                        sso_liveness_watcher(sess_clone, prof_clone).await;
+                    });
+
+                    self.sessions.insert(alias_name.clone(), session);
+                }
+                _ => {
+                    // Not authenticated — leave as Stopped
+                }
+            }
+        }
+    }
 }
 
 // ─── Resolve profile name from ~/.aws/config ────────────────────────

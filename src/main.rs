@@ -99,6 +99,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new(sorted_aliases, alias_file);
+
+    // Check which SSO sessions are already authenticated before entering the UI
+    app.check_existing_sessions().await;
+
     let result = run_app(&mut terminal, &mut app).await;
 
     // Cleanup

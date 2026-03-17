@@ -3,33 +3,43 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
-/// Strip ANSI escape sequences and carriage returns from SSM output.
+/// Strip ANSI escape sequences and control characters from SSM output.
 /// The session-manager-plugin sends raw terminal output that includes
-/// color codes (\x1b[...m), cursor sequences, and \r line endings —
-/// all of which scatter text when rendered in a ratatui Paragraph.
+/// color codes (\x1b[...m), cursor sequences, OSC sequences (\x1b]...\x07),
+/// and \r carriage returns — all of which scatter text in a ratatui Paragraph.
 fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == 0x1b {
-            i += 1;
-            if i < bytes.len() && bytes[i] == b'[' {
-                // CSI sequence — skip until a letter terminates it
-                i += 1;
-                while i < bytes.len() && !bytes[i].is_ascii_alphabetic() {
-                    i += 1;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            match chars.peek().copied() {
+                Some('[') => {
+                    // CSI sequence: ESC [ ... <letter>
+                    chars.next();
+                    for nc in chars.by_ref() {
+                        if nc.is_ascii_alphabetic() { break; }
+                    }
                 }
-                i += 1;
-            } else {
-                // Other ESC sequence — skip one more byte
-                i += 1;
+                Some(']') => {
+                    // OSC sequence: ESC ] ... BEL  or  ESC ] ... ESC '\'
+                    chars.next();
+                    while let Some(nc) = chars.next() {
+                        if nc == '\x07' { break; }
+                        if nc == '\x1b' {
+                            if chars.peek().copied() == Some('\\') { chars.next(); }
+                            break;
+                        }
+                    }
+                }
+                _ => {
+                    // Other 2-byte ESC sequence (e.g. ESC = ESC > ESC ( ESC O ...)
+                    chars.next();
+                }
             }
-        } else if bytes[i] == b'\r' {
-            i += 1;
+        } else if c == '\r' || (c.is_control() && c != '\n') {
+            // Drop carriage returns and all other control chars (BEL, BS, TAB, etc.)
         } else {
-            out.push(bytes[i] as char);
-            i += 1;
+            out.push(c);
         }
     }
     out

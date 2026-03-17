@@ -23,9 +23,7 @@ pub struct Ec2Instance {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SsmConnectionStatus {
     Disconnected,
-    Connecting,
     Connected,
-    Error(String),
 }
 
 /// One live PTY session to a single EC2 instance.
@@ -164,10 +162,6 @@ impl InstancesState {
         self.ssm_sessions.get(self.active_session_idx)
     }
 
-    pub fn active_session_mut(&mut self) -> Option<&mut SsmSession> {
-        self.ssm_sessions.get_mut(self.active_session_idx)
-    }
-
     pub fn next_session(&mut self) {
         if self.ssm_sessions.len() > 1 {
             self.active_session_idx = (self.active_session_idx + 1) % self.ssm_sessions.len();
@@ -181,12 +175,6 @@ impl InstancesState {
             } else {
                 self.active_session_idx - 1
             };
-        }
-    }
-
-    pub fn switch_to_session(&mut self, idx: usize) {
-        if idx < self.ssm_sessions.len() {
-            self.active_session_idx = idx;
         }
     }
 

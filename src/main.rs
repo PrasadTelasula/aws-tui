@@ -7,7 +7,7 @@ mod ui;
 
 use app::{App, AppTab, ConfirmAction, InputMode};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind},
+    event::{self, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -94,7 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -107,8 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
+        LeaveAlternateScreen
     )?;
     terminal.show_cursor()?;
 
@@ -143,28 +142,7 @@ async fn run_app(
         terminal.draw(|f| ui::draw(f, app))?;
 
         if event::poll(tick_rate)? {
-            let ev = event::read()?;
-
-            // Mouse scroll — works in any mode, any tab
-            if let Event::Mouse(mouse) = &ev {
-                match mouse.kind {
-                    MouseEventKind::ScrollUp => {
-                        if app.active_tab == AppTab::Terminal {
-                            app.terminal_state.active_mut().scroll_up(3);
-                        }
-                        continue;
-                    }
-                    MouseEventKind::ScrollDown => {
-                        if app.active_tab == AppTab::Terminal {
-                            app.terminal_state.active_mut().scroll_down(3);
-                        }
-                        continue;
-                    }
-                    _ => {}
-                }
-            }
-
-            if let Event::Key(key) = ev {
+            if let Event::Key(key) = event::read()? {
                 // ── Confirmation popup ──
                 if app.show_confirm {
                     match key.code {

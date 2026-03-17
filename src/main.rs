@@ -7,7 +7,7 @@ mod ui;
 
 use app::{App, AppTab, ConfirmAction, InputMode};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -143,7 +143,28 @@ async fn run_app(
         terminal.draw(|f| ui::draw(f, app))?;
 
         if event::poll(tick_rate)? {
-            if let Event::Key(key) = event::read()? {
+            let ev = event::read()?;
+
+            // Mouse scroll — works in any mode, any tab
+            if let Event::Mouse(mouse) = &ev {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        if app.active_tab == AppTab::Terminal {
+                            app.terminal_state.active_mut().scroll_up(3);
+                        }
+                        continue;
+                    }
+                    MouseEventKind::ScrollDown => {
+                        if app.active_tab == AppTab::Terminal {
+                            app.terminal_state.active_mut().scroll_down(3);
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+
+            if let Event::Key(key) = ev {
                 // ── Confirmation popup ──
                 if app.show_confirm {
                     match key.code {
@@ -252,6 +273,13 @@ async fn run_app(
                         KeyCode::Delete => term.delete(),
                         KeyCode::Left => term.cursor_left(),
                         KeyCode::Right => term.cursor_right(),
+                        // Shift+Up/Down: scroll output (reliable in all terminals)
+                        KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                            term.scroll_up(3);
+                        }
+                        KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                            term.scroll_down(3);
+                        }
                         KeyCode::Up => term.history_up(),
                         KeyCode::Down => term.history_down(),
                         KeyCode::PageUp => term.scroll_up(10),

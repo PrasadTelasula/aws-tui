@@ -903,18 +903,22 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         AppTab::Terminal => {
             if app.input_mode == InputMode::TerminalInput {
                 spans.push(key_span("Enter"));
-                spans.push(desc_span(" execute  "));
+                spans.push(desc_span(" run  "));
                 spans.push(key_span("Tab"));
                 spans.push(desc_span(" accept  "));
-                spans.push(key_span("↑↓"));
-                spans.push(desc_span(" history  "));
+                spans.push(key_span("S+↑↓"));
+                spans.push(desc_span(" scroll  "));
+                spans.push(key_span("Ctrl+H/L"));
+                spans.push(desc_span(" switch  "));
                 spans.push(key_span("Esc"));
                 spans.push(desc_span(" normal  "));
             } else {
                 spans.push(key_span("i"));
                 spans.push(desc_span(" input  "));
-                spans.push(key_span("↑↓"));
+                spans.push(key_span("j/k"));
                 spans.push(desc_span(" scroll  "));
+                spans.push(key_span("h/l"));
+                spans.push(desc_span(" switch  "));
             }
         }
     }

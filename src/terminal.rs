@@ -14,6 +14,14 @@ pub struct CommandEntry {
     pub _started_at: Instant,
 }
 
+/// A live profile that can be selected in the terminal
+#[derive(Debug, Clone)]
+pub struct LiveProfile {
+    pub profile_name: String,
+    pub _alias_name: String,
+    pub _session_name: String,
+}
+
 pub struct TerminalState {
     pub input: String,
     pub cursor_pos: usize,
@@ -25,6 +33,11 @@ pub struct TerminalState {
     pub completer: Completer,
     cmd_tx: mpsc::UnboundedSender<(usize, String, bool)>,
     cmd_rx: mpsc::UnboundedReceiver<(usize, String, bool)>,
+
+    /// Available live profiles (refreshed from app state)
+    pub live_profiles: Vec<LiveProfile>,
+    /// Currently selected profile index (None = no profile / default)
+    pub selected_profile: Option<usize>,
 }
 
 impl TerminalState {
@@ -41,6 +54,8 @@ impl TerminalState {
             completer: Completer::new(),
             cmd_tx: tx,
             cmd_rx: rx,
+            live_profiles: Vec::new(),
+            selected_profile: None,
         }
     }
 
@@ -179,6 +194,37 @@ impl TerminalState {
         self.completer.dismiss();
     }
 
+    /// Get the currently selected profile name
+    pub fn active_profile(&self) -> Option<&str> {
+        self.selected_profile
+            .and_then(|i| self.live_profiles.get(i))
+            .map(|p| p.profile_name.as_str())
+    }
+
+    /// Cycle to next profile (wraps around, None at the end = default)
+    pub fn next_profile(&mut self) {
+        if self.live_profiles.is_empty() {
+            return;
+        }
+        self.selected_profile = match self.selected_profile {
+            None => Some(0),
+            Some(i) if i + 1 >= self.live_profiles.len() => None,
+            Some(i) => Some(i + 1),
+        };
+    }
+
+    /// Cycle to previous profile
+    pub fn prev_profile(&mut self) {
+        if self.live_profiles.is_empty() {
+            return;
+        }
+        self.selected_profile = match self.selected_profile {
+            None => Some(self.live_profiles.len() - 1),
+            Some(0) => None,
+            Some(i) => Some(i - 1),
+        };
+    }
+
     pub async fn execute(&mut self) {
         let cmd = self.input.trim().to_string();
         if cmd.is_empty() {
@@ -204,9 +250,16 @@ impl TerminalState {
             return;
         }
 
+        let profile = self.active_profile().map(|s| s.to_string());
+        let display_cmd = if let Some(ref prof) = profile {
+            format!("[{}] {}", prof, cmd)
+        } else {
+            cmd.clone()
+        };
+
         let entry_idx = self.entries.len();
         self.entries.push(CommandEntry {
-            command: cmd.clone(),
+            command: display_cmd,
             output_lines: Vec::new(),
             exit_code: None,
             is_running: true,
@@ -215,13 +268,20 @@ impl TerminalState {
 
         let tx = self.cmd_tx.clone();
         tokio::spawn(async move {
-            let result = Command::new("sh")
+            let mut command = Command::new("sh");
+            command
                 .arg("-c")
                 .arg(&cmd)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
-                .stdin(Stdio::null())
-                .spawn();
+                .stdin(Stdio::null());
+
+            // Inject AWS_PROFILE env var if a profile is selected
+            if let Some(ref prof) = profile {
+                command.env("AWS_PROFILE", prof);
+            }
+
+            let result = command.spawn();
 
             match result {
                 Ok(mut child) => {

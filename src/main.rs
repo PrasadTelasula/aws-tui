@@ -259,6 +259,12 @@ async fn run_app(
                         KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             ts.delete_word_backward();
                         }
+                        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            ts.prev_profile();
+                        }
+                        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            ts.next_profile();
+                        }
                         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             ts.input.clear();
                             ts.cursor_pos = 0;

@@ -171,22 +171,78 @@ fn draw_terminal(f: &mut Frame, area: Rect, app: &App) {
     let inner = outer.inner(area);
     f.render_widget(outer, area);
 
+    let has_profiles = !ts.live_profiles.is_empty();
+
     let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(3),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ])
+        .constraints(if has_profiles {
+            vec![
+                Constraint::Length(1),  // profile bar
+                Constraint::Min(3),    // output
+                Constraint::Length(1), // separator
+                Constraint::Length(1), // input
+            ]
+        } else {
+            vec![
+                Constraint::Length(0),  // no profile bar
+                Constraint::Min(3),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ]
+        })
         .split(inner);
 
-    draw_terminal_output(f, sections[0], ts, app);
-    thin_rule(f, sections[1]);
-    draw_terminal_input(f, sections[2], ts, app);
+    // Profile selector bar
+    if has_profiles {
+        draw_profile_bar(f, sections[0], ts);
+    }
+
+    draw_terminal_output(f, sections[1], ts, app);
+    thin_rule(f, sections[2]);
+    draw_terminal_input(f, sections[3], ts, app);
 
     if ts.completer.visible {
-        draw_suggestions(f, sections[2], inner, ts);
+        draw_suggestions(f, sections[3], inner, ts);
     }
+}
+
+fn draw_profile_bar(f: &mut Frame, area: Rect, ts: &crate::terminal::TerminalState) {
+    let mut spans: Vec<Span> = vec![
+        Span::styled(format!(" {} profile: ", ICON_KEY), Style::default().fg(FG3)),
+    ];
+
+    // "default" option (no profile)
+    let default_selected = ts.selected_profile.is_none();
+    spans.push(Span::styled(
+        " default ",
+        if default_selected {
+            Style::default().fg(BG).bg(TEAL).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(FG3)
+        },
+    ));
+
+    // Live profiles
+    for (i, profile) in ts.live_profiles.iter().enumerate() {
+        let is_selected = ts.selected_profile == Some(i);
+        spans.push(Span::styled("  ", Style::default()));
+        spans.push(Span::styled(
+            format!(" {} ", profile.profile_name),
+            if is_selected {
+                Style::default().fg(BG).bg(GREEN).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(FG2)
+            },
+        ));
+    }
+
+    spans.push(Span::styled("    ", Style::default()));
+    spans.push(Span::styled("Ctrl+P/N cycle", Style::default().fg(FG4)));
+
+    f.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(BG_BAR)),
+        area,
+    );
 }
 
 fn draw_terminal_output(f: &mut Frame, area: Rect, ts: &crate::terminal::TerminalState, app: &App) {
@@ -281,9 +337,16 @@ fn draw_terminal_input(f: &mut Frame, area: Rect, ts: &crate::terminal::Terminal
 
     let bg = if app.input_mode == InputMode::TerminalInput { BG_HL } else { BG };
 
+    // Show active profile in prompt
+    let profile_span = if let Some(prof) = ts.active_profile() {
+        Span::styled(format!(" [{}] ", prof), Style::default().fg(GREEN))
+    } else {
+        Span::styled(format!(" {} ", ICON_CLOUD), Style::default().fg(TEAL))
+    };
+
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(format!(" {} ", ICON_CLOUD), Style::default().fg(TEAL)),
+            profile_span,
             Span::styled("$ ", Style::default().fg(BLUE)),
             Span::styled(before, Style::default().fg(FG)),
             Span::styled(cursor, Style::default().fg(BLUE)),

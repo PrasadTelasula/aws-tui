@@ -293,6 +293,15 @@ impl SessionManager {
         }
     }
 
+    pub async fn get_sso_profile(&self, alias_name: &str) -> Option<String> {
+        if let Some(session) = self.sessions.get(alias_name) {
+            let s = session.lock().await;
+            s.sso_profile.clone()
+        } else {
+            None
+        }
+    }
+
     pub async fn get_token_expiry(&self, alias_name: &str) -> (Option<String>, Option<u64>) {
         if let Some(session) = self.sessions.get(alias_name) {
             let s = session.lock().await;

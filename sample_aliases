@@ -1,0 +1,22 @@
+# AWS SSO Login aliases
+alias dmscawsprd='aws sso login --sso-session sso-dmsc-prd'
+alias dmscawsstg='aws sso login --sso-session sso-dmsc-stg'
+alias dmscawsint='aws sso login --sso-session sso-dmsc-int'
+alias dmscawsmedia='aws sso login --sso-session sso-dmsc-media'
+alias runner='aws sso login --sso-session sso-runner'
+alias watermarkawsprd='aws sso login --sso-session sso-watermark-prd'
+alias watermarkawsstg='aws sso login --sso-session sso-watermark-stg'
+alias watermarkawsdev='aws sso login --sso-session sso-watermark-dev'
+
+# AWS SSM Start Session aliases (Database port forwarding)
+alias dmscdbint='aws ssm start-session --target i-0abc123def456 --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters {"portNumber":["1111"],"host":["db.int.registry-svc.sonypictures.com"],"localPortNumber":["1111"]}'
+alias dmscdbstg='aws ssm start-session --target i-0abc123def789 --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters {"portNumber":["1112"],"host":["db.stg.registry-svc.sonypictures.com"],"localPortNumber":["1112"]}'
+alias dmscdbprd='aws ssm start-session --target i-0abc123def012 --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters {"portNumber":["1113"],"host":["db.registry-svc.sonypictures.com"],"localPortNumber":["1113"]}'
+
+# Watermark DB
+alias watermarkdbprd='aws ssm start-session --target i-0def456abc789 --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters {"portNumber":["5432"],"localPortNumber":["2222"],"host":["watermark-db.internal"]}'
+
+# OpenSearch port forwarding
+alias dmscosint='aws ssm start-session --target i-0aaa111bbb222 --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters {"localPortNumber":["8201"],"host":["opensearch.int.internal"],"portNumber":["443"]}'
+alias dmscostg='aws ssm start-session --target i-0aaa111bbb333 --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters {"localPortNumber":["8202"],"host":["opensearch.stg.internal"],"portNumber":["443"]}'
+alias dmscosprd='aws ssm start-session --target i-0aaa111bbb444 --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters {"localPortNumber":["8203"],"host":["opensearch.prd.internal"],"portNumber":["443"]}'

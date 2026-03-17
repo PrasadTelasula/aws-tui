@@ -1,9 +1,16 @@
 use crate::parser::{Alias, AliasKind};
 use crate::session::{SessionKind, SessionManager, SessionStatus};
+use crate::terminal::TerminalState;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 use tokio::sync::mpsc;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AppTab {
+    Sessions,
+    Terminal,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ActivePanel {
@@ -15,6 +22,7 @@ pub enum ActivePanel {
 pub enum InputMode {
     Normal,
     Search,
+    TerminalInput,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -63,6 +71,10 @@ pub struct App {
     pub _alias_file: PathBuf,
     pub list_scroll_offset: usize,
 
+    // Tab state
+    pub active_tab: AppTab,
+    pub terminal_state: TerminalState,
+
     // Animation state
     pub tick: u64,
     pub spinner_frame: usize,
@@ -105,6 +117,8 @@ impl App {
             confirm_action: ConfirmAction::None,
             _alias_file: alias_file,
             list_scroll_offset: 0,
+            active_tab: AppTab::Sessions,
+            terminal_state: TerminalState::new(),
             tick: 0,
             spinner_frame: 0,
             cursor_visible: true,
@@ -150,6 +164,9 @@ impl App {
         self.tick += 1;
         self.spinner_frame = (self.tick as usize / 2) % SPINNER_FRAMES.len();
         self.cursor_visible = (self.tick / 5) % 2 == 0;
+
+        // Process terminal command output
+        self.terminal_state.tick();
 
         // Clear expired toasts (after 3 seconds)
         if let Some(ref toast) = self.toast {

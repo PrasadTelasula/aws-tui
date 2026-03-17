@@ -54,16 +54,22 @@ pub fn draw(f: &mut Frame, app: &App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(2),
-            Constraint::Length(1),
+            Constraint::Length(1),  // tab bar
+            Constraint::Length(1),  // separator
             Constraint::Min(8),
             Constraint::Length(1),
         ])
         .split(size);
 
     draw_header(f, layout[0], app);
-    draw_separator(f, layout[1]);
-    draw_body(f, layout[2], app);
-    draw_footer(f, layout[3], app);
+    draw_tab_bar(f, layout[1], app);
+    draw_separator(f, layout[2]);
+
+    match app.active_tab {
+        AppTab::Sessions => draw_body(f, layout[3], app),
+        AppTab::Terminal  => draw_terminal(f, layout[3], app),
+    }
+    draw_footer(f, layout[4], app);
 
     if app.input_mode == InputMode::Search {
         draw_search(f, size, app);
@@ -113,12 +119,237 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
     );
 }
 
+fn draw_tab_bar(f: &mut Frame, area: Rect, app: &App) {
+    let s_style = if app.active_tab == AppTab::Sessions {
+        Style::default().fg(BLUE).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(FG3)
+    };
+    let t_style = if app.active_tab == AppTab::Terminal {
+        Style::default().fg(BLUE).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(FG3)
+    };
+
+    let line = Line::from(vec![
+        Span::styled(
+            if app.active_tab == AppTab::Sessions { " ▎" } else { "  " },
+            Style::default().fg(BLUE),
+        ),
+        Span::styled(format!(" {} Sessions ", ICON_PLUG), s_style),
+        Span::styled("   ", Style::default()),
+        Span::styled(
+            if app.active_tab == AppTab::Terminal { "▎" } else { " " },
+            Style::default().fg(BLUE),
+        ),
+        Span::styled(format!(" {} Terminal ", ICON_TERM), t_style),
+        Span::styled("      ", Style::default()),
+        Span::styled("F1/F2 switch tabs", Style::default().fg(FG4)),
+    ]);
+
+    f.render_widget(
+        Paragraph::new(line).style(Style::default().bg(BG_BAR)),
+        area,
+    );
+}
+
 fn draw_separator(f: &mut Frame, area: Rect) {
     let line: String = "─".repeat(area.width as usize);
     f.render_widget(Paragraph::new(Span::styled(line, Style::default().fg(FG4))), area);
 }
 
-// ─── BODY ───────────────────────────────────────────────────────────
+// ─── TERMINAL TAB ───────────────────────────────────────────────────
+
+fn draw_terminal(f: &mut Frame, area: Rect, app: &App) {
+    let ts = &app.terminal_state;
+
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(FG4))
+        .style(Style::default().bg(BG));
+    let inner = outer.inner(area);
+    f.render_widget(outer, area);
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(3),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+
+    draw_terminal_output(f, sections[0], ts, app);
+    thin_rule(f, sections[1]);
+    draw_terminal_input(f, sections[2], ts, app);
+
+    if ts.completer.visible {
+        draw_suggestions(f, sections[2], inner, ts);
+    }
+}
+
+fn draw_terminal_output(f: &mut Frame, area: Rect, ts: &crate::terminal::TerminalState, app: &App) {
+    if ts.entries.is_empty() {
+        let hints = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Type an AWS CLI command and press Enter",
+                Style::default().fg(FG3),
+            )),
+            Line::from(Span::styled(
+                "  Suggestions appear as you type  ·  Tab to accept  ·  Up/Down for history",
+                Style::default().fg(FG4),
+            )),
+        ];
+        f.render_widget(Paragraph::new(hints), area);
+        return;
+    }
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    for entry in &ts.entries {
+        let status_icon = if entry.is_running {
+            Span::styled(format!("{} ", app.spinner()), Style::default().fg(AMBER))
+        } else {
+            match entry.exit_code {
+                Some(0) => Span::styled("✓ ", Style::default().fg(GREEN)),
+                _       => Span::styled("✗ ", Style::default().fg(RED)),
+            }
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(" ", Style::default()),
+            status_icon,
+            Span::styled("$ ", Style::default().fg(BLUE)),
+            Span::styled(
+                entry.command.as_str(),
+                Style::default().fg(FG).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+
+        for line in &entry.output_lines {
+            let color = if line.starts_with("[stderr]") {
+                AMBER
+            } else if line.to_lowercase().contains("error") {
+                RED
+            } else {
+                FG2
+            };
+            lines.push(Line::from(vec![
+                Span::styled("   ", Style::default()),
+                Span::styled(line.as_str(), Style::default().fg(color)),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+    }
+
+    let total = lines.len();
+    let visible = area.height as usize;
+    let bottom_scroll = if total > visible { total - visible } else { 0 };
+    let scroll = bottom_scroll.saturating_sub(ts.scroll_offset);
+
+    f.render_widget(
+        Paragraph::new(lines).scroll((scroll as u16, 0)),
+        area,
+    );
+
+    if total > visible {
+        let mut sb = ScrollbarState::new(total).position(scroll);
+        f.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .style(Style::default().fg(FG4)),
+            area,
+            &mut sb,
+        );
+    }
+}
+
+fn draw_terminal_input(f: &mut Frame, area: Rect, ts: &crate::terminal::TerminalState, app: &App) {
+    let cursor = if app.input_mode == InputMode::TerminalInput && app.cursor_visible {
+        "▏"
+    } else {
+        ""
+    };
+
+    let (before, after) = if ts.cursor_pos <= ts.input.len() {
+        ts.input.split_at(ts.cursor_pos)
+    } else {
+        (ts.input.as_str(), "")
+    };
+
+    let bg = if app.input_mode == InputMode::TerminalInput { BG_HL } else { BG };
+
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(format!(" {} ", ICON_CLOUD), Style::default().fg(TEAL)),
+            Span::styled("$ ", Style::default().fg(BLUE)),
+            Span::styled(before, Style::default().fg(FG)),
+            Span::styled(cursor, Style::default().fg(BLUE)),
+            Span::styled(after, Style::default().fg(FG)),
+        ])).style(Style::default().bg(bg)),
+        area,
+    );
+}
+
+fn draw_suggestions(f: &mut Frame, input_area: Rect, container: Rect, ts: &crate::terminal::TerminalState) {
+    let result = match &ts.completer.cached_result {
+        Some(r) if !r.suggestions.is_empty() => r,
+        _ => return,
+    };
+
+    let max_visible = 8;
+    let count = result.suggestions.len().min(max_visible);
+    let popup_h = count as u16 + 2;
+
+    let max_w = result.suggestions.iter()
+        .take(max_visible)
+        .map(|s| s.len())
+        .max()
+        .unwrap_or(10);
+    let popup_w = (max_w as u16 + 4).min(container.width.saturating_sub(4));
+
+    let x_off = 5 + result.prefix_start as u16;
+    let x = (container.x + x_off).min(container.x + container.width - popup_w);
+    let y = input_area.y.saturating_sub(popup_h);
+
+    let popup = Rect::new(x, y, popup_w, popup_h);
+    f.render_widget(Clear, popup);
+
+    let items: Vec<ListItem> = result.suggestions.iter()
+        .take(max_visible)
+        .enumerate()
+        .map(|(i, s)| {
+            let style = if i == ts.completer.selected_index {
+                Style::default().fg(FG).bg(BG_HL).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(FG2)
+            };
+            ListItem::new(Span::styled(format!(" {} ", s), style))
+        })
+        .collect();
+
+    let title = if result.suggestions.len() > max_visible {
+        format!(" {}/{} ", max_visible, result.suggestions.len())
+    } else {
+        format!(" {} ", result.suggestions.len())
+    };
+
+    f.render_widget(
+        List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(BLUE))
+                .title(Span::styled(title, Style::default().fg(FG3)))
+                .style(Style::default().bg(BG_BAR)),
+        ),
+        popup,
+    );
+}
+
+// ─── BODY (Sessions tab) ────────────────────────────────────────────
 
 fn draw_body(f: &mut Frame, area: Rect, app: &App) {
     let active_left = app.active_panel == ActivePanel::AliasList;
@@ -566,41 +797,65 @@ fn thin_rule(f: &mut Frame, area: Rect) {
 // ─── FOOTER ─────────────────────────────────────────────────────────
 
 fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
-    let selected_status = if !app.aliases.is_empty() {
-        &app.session_statuses[app.selected_index]
-    } else {
-        &SessionStatus::Stopped
-    };
-
     let mut spans: Vec<Span> = vec![Span::styled(" ", Style::default())];
 
-    spans.push(key_span("↑↓"));
-    spans.push(desc_span(" navigate  "));
+    match app.active_tab {
+        AppTab::Sessions => {
+            let selected_status = if !app.aliases.is_empty() {
+                &app.session_statuses[app.selected_index]
+            } else {
+                &SessionStatus::Stopped
+            };
 
-    match selected_status {
-        SessionStatus::Running | SessionStatus::Starting | SessionStatus::Connected => {
-            spans.push(key_span("s"));
-            spans.push(desc_span(" stop  "));
+            spans.push(key_span("↑↓"));
+            spans.push(desc_span(" navigate  "));
+
+            match selected_status {
+                SessionStatus::Running | SessionStatus::Starting | SessionStatus::Connected => {
+                    spans.push(key_span("s"));
+                    spans.push(desc_span(" stop  "));
+                }
+                SessionStatus::Expired => {
+                    spans.push(key_span("Enter"));
+                    spans.push(desc_span(" re-login  "));
+                }
+                _ => {
+                    spans.push(key_span("Enter"));
+                    spans.push(desc_span(" start  "));
+                }
+            }
+
+            if app.running_count > 0 {
+                spans.push(key_span("S"));
+                spans.push(desc_span(" stop all  "));
+            }
+
+            spans.push(key_span("Tab"));
+            spans.push(desc_span(" switch  "));
+            spans.push(key_span("/"));
+            spans.push(desc_span(" search  "));
         }
-        SessionStatus::Expired => {
-            spans.push(key_span("Enter"));
-            spans.push(desc_span(" re-login  "));
-        }
-        _ => {
-            spans.push(key_span("Enter"));
-            spans.push(desc_span(" start  "));
+        AppTab::Terminal => {
+            if app.input_mode == InputMode::TerminalInput {
+                spans.push(key_span("Enter"));
+                spans.push(desc_span(" execute  "));
+                spans.push(key_span("Tab"));
+                spans.push(desc_span(" accept  "));
+                spans.push(key_span("↑↓"));
+                spans.push(desc_span(" history  "));
+                spans.push(key_span("Esc"));
+                spans.push(desc_span(" normal  "));
+            } else {
+                spans.push(key_span("i"));
+                spans.push(desc_span(" input  "));
+                spans.push(key_span("↑↓"));
+                spans.push(desc_span(" scroll  "));
+            }
         }
     }
 
-    if app.running_count > 0 {
-        spans.push(key_span("S"));
-        spans.push(desc_span(" stop all  "));
-    }
-
-    spans.push(key_span("Tab"));
-    spans.push(desc_span(" switch  "));
-    spans.push(key_span("/"));
-    spans.push(desc_span(" search  "));
+    spans.push(key_span("F1/F2"));
+    spans.push(desc_span(" tabs  "));
     spans.push(key_span("q"));
     spans.push(desc_span(" quit"));
 

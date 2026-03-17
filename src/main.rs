@@ -1,9 +1,11 @@
 mod app;
+mod completer;
 mod parser;
 mod session;
+mod terminal;
 mod ui;
 
-use app::{App, ConfirmAction, InputMode};
+use app::{App, AppTab, ConfirmAction, InputMode};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
@@ -75,7 +77,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    // Sort: group → kind → name
     let mut sorted_aliases = aliases;
     sorted_aliases.sort_by(|a, b| {
         let kind_order = |k: &parser::AliasKind| -> u8 {
@@ -91,7 +92,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .then(a.name.cmp(&b.name))
     });
 
-    // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -99,13 +99,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new(sorted_aliases, alias_file);
-
-    // Check which SSO sessions are already authenticated before entering the UI
     app.check_existing_sessions().await;
 
     let result = run_app(&mut terminal, &mut app).await;
 
-    // Cleanup
     app.stop_all_sessions().await;
     disable_raw_mode()?;
     execute!(
@@ -127,22 +124,27 @@ async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Animation tick rate: ~20fps
     let tick_rate = Duration::from_millis(50);
 
     loop {
-        // Process async output
         app.process_output_messages().await;
         app.refresh_statuses().await;
         app.on_tick();
 
-        // Draw
+        // Drive completer (debounced)
+        if app.active_tab == AppTab::Terminal
+            && app.input_mode == InputMode::TerminalInput
+            && app.terminal_state.completer.should_query(&app.terminal_state.input)
+        {
+            let input = app.terminal_state.input.clone();
+            app.terminal_state.completer.query(&input).await;
+        }
+
         terminal.draw(|f| ui::draw(f, app))?;
 
-        // Poll for events with short timeout for smooth animation
         if event::poll(tick_rate)? {
             if let Event::Key(key) = event::read()? {
-                // Confirmation popup
+                // ── Confirmation popup ──
                 if app.show_confirm {
                     match key.code {
                         KeyCode::Char('y') | KeyCode::Char('Y') => {
@@ -163,7 +165,7 @@ async fn run_app(
                     continue;
                 }
 
-                // Search mode
+                // ── Search mode (Sessions tab) ──
                 if app.input_mode == InputMode::Search {
                     match key.code {
                         KeyCode::Esc => {
@@ -187,7 +189,88 @@ async fn run_app(
                     continue;
                 }
 
-                // Normal mode
+                // ── Global: F1/F2 tab switching (works in ANY mode) ──
+                match key.code {
+                    KeyCode::F(1) => {
+                        app.active_tab = AppTab::Sessions;
+                        app.input_mode = InputMode::Normal;
+                        continue;
+                    }
+                    KeyCode::F(2) => {
+                        app.active_tab = AppTab::Terminal;
+                        app.input_mode = InputMode::TerminalInput;
+                        continue;
+                    }
+                    _ => {}
+                }
+
+                // ── Terminal input mode ──
+                if app.input_mode == InputMode::TerminalInput {
+                    let ts = &mut app.terminal_state;
+
+                    // Suggestion popup navigation
+                    if ts.completer.visible {
+                        match key.code {
+                            KeyCode::Down => { ts.completer.next(); continue; }
+                            KeyCode::Up => { ts.completer.prev(); continue; }
+                            KeyCode::Tab => {
+                                if let Some(new_input) = ts.completer.accept_selected(&ts.input) {
+                                    ts.input = new_input;
+                                    ts.cursor_pos = ts.input.len();
+                                    ts.completer.notify_keystroke();
+                                }
+                                continue;
+                            }
+                            KeyCode::Esc => { ts.completer.dismiss(); continue; }
+                            _ => { ts.completer.dismiss(); }
+                        }
+                    }
+
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.input_mode = InputMode::Normal;
+                            ts.completer.dismiss();
+                        }
+                        KeyCode::Enter => {
+                            ts.execute().await;
+                        }
+                        KeyCode::Backspace => ts.backspace(),
+                        KeyCode::Delete => ts.delete(),
+                        KeyCode::Left => ts.cursor_left(),
+                        KeyCode::Right => ts.cursor_right(),
+                        KeyCode::Up => ts.history_up(),
+                        KeyCode::Down => ts.history_down(),
+                        KeyCode::Tab => {
+                            if let Some(new_input) = ts.completer.accept_selected(&ts.input) {
+                                ts.input = new_input;
+                                ts.cursor_pos = ts.input.len();
+                                ts.completer.notify_keystroke();
+                            }
+                        }
+                        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            ts.cursor_home();
+                        }
+                        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            ts.cursor_end();
+                        }
+                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            ts.clear_line();
+                        }
+                        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            ts.delete_word_backward();
+                        }
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            ts.input.clear();
+                            ts.cursor_pos = 0;
+                            ts.completer.dismiss();
+                        }
+                        KeyCode::Char(c) => ts.insert_char(c),
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                // ── Normal mode ──
                 match key.code {
                     KeyCode::Char('q') => {
                         if app.running_count > 0 {
@@ -204,12 +287,35 @@ async fn run_app(
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         app.should_quit = true;
                     }
-                    KeyCode::Down | KeyCode::Char('j') => app.next(),
-                    KeyCode::Up | KeyCode::Char('k') => app.previous(),
-                    KeyCode::Tab | KeyCode::BackTab => app.toggle_panel(),
-                    KeyCode::Enter => app.start_selected().await,
-                    KeyCode::Char('s') => app.stop_selected().await,
-                    KeyCode::Char('S') => {
+
+                    // Terminal tab: normal mode keys
+                    KeyCode::Char('i') if app.active_tab == AppTab::Terminal => {
+                        app.input_mode = InputMode::TerminalInput;
+                    }
+                    KeyCode::Up | KeyCode::Char('k') if app.active_tab == AppTab::Terminal => {
+                        app.terminal_state.scroll_up(3);
+                    }
+                    KeyCode::Down | KeyCode::Char('j') if app.active_tab == AppTab::Terminal => {
+                        app.terminal_state.scroll_down(3);
+                    }
+
+                    // Sessions tab: normal mode keys
+                    KeyCode::Down | KeyCode::Char('j') if app.active_tab == AppTab::Sessions => {
+                        app.next();
+                    }
+                    KeyCode::Up | KeyCode::Char('k') if app.active_tab == AppTab::Sessions => {
+                        app.previous();
+                    }
+                    KeyCode::Tab | KeyCode::BackTab if app.active_tab == AppTab::Sessions => {
+                        app.toggle_panel();
+                    }
+                    KeyCode::Enter if app.active_tab == AppTab::Sessions => {
+                        app.start_selected().await;
+                    }
+                    KeyCode::Char('s') if app.active_tab == AppTab::Sessions => {
+                        app.stop_selected().await;
+                    }
+                    KeyCode::Char('S') if app.active_tab == AppTab::Sessions => {
                         if app.running_count > 0 {
                             app.show_confirm = true;
                             app.confirm_message = format!(
@@ -219,7 +325,7 @@ async fn run_app(
                             app.confirm_action = ConfirmAction::StopAll;
                         }
                     }
-                    KeyCode::Char('/') => {
+                    KeyCode::Char('/') if app.active_tab == AppTab::Sessions => {
                         app.input_mode = InputMode::Search;
                         app.search_query.clear();
                     }
@@ -229,8 +335,10 @@ async fn run_app(
                             app.filtered_indices.clear();
                         }
                     }
-                    KeyCode::Char('g') => app.selected_index = 0,
-                    KeyCode::Char('G') => {
+                    KeyCode::Char('g') if app.active_tab == AppTab::Sessions => {
+                        app.selected_index = 0;
+                    }
+                    KeyCode::Char('G') if app.active_tab == AppTab::Sessions => {
                         if !app.aliases.is_empty() {
                             app.selected_index = app.aliases.len() - 1;
                         }

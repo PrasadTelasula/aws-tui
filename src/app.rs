@@ -25,6 +25,7 @@ pub enum InputMode {
     Normal,
     Search,
     TerminalInput,
+    SsmInput,       // SSM terminal in Instances tab
 }
 
 #[derive(Debug, Clone, PartialEq)]

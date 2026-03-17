@@ -498,32 +498,24 @@ fn draw_instances(f: &mut Frame, area: Rect, app: &App) {
         .constraints([Constraint::Length(1), Constraint::Min(3)])
         .split(left_area);
 
-    // Region selector (single line)
+    // Region selector (single line showing current, opens dropdown)
     let region_active = is.focus == InstanceFocus::RegionList;
-    let mut region_spans: Vec<Span> = vec![
+    let region_spans = vec![
         Span::styled(
             if region_active { " ▸ " } else { "   " },
             Style::default().fg(BLUE),
         ),
+        Span::styled(format!("{} ", ICON_GLOBE), Style::default().fg(TEAL)),
+        Span::styled(
+            is.active_region(),
+            Style::default().fg(if region_active { TEAL } else { FG2 }).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            if is.region_dropdown_open { " ▴" } else { " ▾" },
+            Style::default().fg(FG3),
+        ),
+        Span::styled("  Enter to change", Style::default().fg(FG4)),
     ];
-    // Show 3 regions around current
-    let total_regions = is.regions.len();
-    let start = if is.region_idx > 1 { is.region_idx - 1 } else { 0 };
-    let end = (start + 5).min(total_regions);
-    for i in start..end {
-        let selected = i == is.region_idx;
-        region_spans.push(Span::styled(
-            format!(" {} ", is.regions[i]),
-            if selected {
-                Style::default().fg(BG).bg(TEAL).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(FG3)
-            },
-        ));
-    }
-    if end < total_regions {
-        region_spans.push(Span::styled(" …", Style::default().fg(FG4)));
-    }
     f.render_widget(Paragraph::new(Line::from(region_spans)), left_split[0]);
 
     // Instance list
@@ -619,14 +611,15 @@ fn draw_instances(f: &mut Frame, area: Rect, app: &App) {
 
     // SSM input
     let connected = is.ssm_status == SsmConnectionStatus::Connected;
-    let cursor = if ssm_active && connected && app.cursor_visible { "▏" } else { "" };
+    let typing = app.input_mode == InputMode::SsmInput;
+    let cursor = if typing && connected && app.cursor_visible { "▏" } else { "" };
     let (before, after) = if is.ssm_cursor <= is.ssm_input.len() {
         is.ssm_input.split_at(is.ssm_cursor)
     } else {
         (is.ssm_input.as_str(), "")
     };
 
-    let input_bg = if ssm_active { BG_HL } else { BG };
+    let input_bg = if typing { BG_HL } else { BG };
     let instance_label = if !is.instances.is_empty() {
         let inst = &is.instances[is.selected_instance.min(is.instances.len().saturating_sub(1))];
         format!(" [{}] ", inst.instance_id)
@@ -643,6 +636,40 @@ fn draw_instances(f: &mut Frame, area: Rect, app: &App) {
         ])).style(Style::default().bg(input_bg)),
         right_split[1],
     );
+
+    // Region dropdown popup
+    if is.region_dropdown_open {
+        let dropdown_h = is.regions.len().min(12) as u16 + 2;
+        let dropdown_w = 18u16;
+        let dx = left_split[0].x + 3;
+        let dy = left_split[0].y + 1;
+        let dropdown_area = Rect::new(dx, dy, dropdown_w, dropdown_h);
+
+        f.render_widget(Clear, dropdown_area);
+
+        let items: Vec<ListItem> = is.regions.iter().enumerate().map(|(i, r)| {
+            let selected = i == is.region_idx;
+            ListItem::new(Span::styled(
+                format!(" {} ", r),
+                if selected {
+                    Style::default().fg(BG).bg(TEAL).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(FG2)
+                },
+            ))
+        }).collect();
+
+        f.render_widget(
+            List::new(items).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(TEAL))
+                    .style(Style::default().bg(BG_BAR)),
+            ),
+            dropdown_area,
+        );
+    }
 }
 
 // ─── BODY (Sessions tab) ────────────────────────────────────────────
@@ -1132,36 +1159,40 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
             spans.push(desc_span(" search  "));
         }
         AppTab::Instances => {
-            use crate::instances::InstanceFocus;
-            let is = &app.instances_state;
-            match is.focus {
-                InstanceFocus::RegionList => {
-                    spans.push(key_span("↑↓"));
-                    spans.push(desc_span(" region  "));
-                    spans.push(key_span("Enter"));
-                    spans.push(desc_span(" select+fetch  "));
-                    spans.push(key_span("Tab"));
-                    spans.push(desc_span(" focus  "));
-                }
-                InstanceFocus::InstanceList => {
-                    spans.push(key_span("↑↓"));
-                    spans.push(desc_span(" select  "));
-                    spans.push(key_span("Enter"));
-                    spans.push(desc_span(" connect SSM  "));
-                    spans.push(key_span("r"));
-                    spans.push(desc_span(" refresh  "));
-                    spans.push(key_span("Tab"));
-                    spans.push(desc_span(" focus  "));
-                }
-                InstanceFocus::SsmTerminal => {
-                    spans.push(key_span("Enter"));
-                    spans.push(desc_span(" send  "));
-                    spans.push(key_span("S+↑↓"));
-                    spans.push(desc_span(" scroll  "));
-                    spans.push(key_span("d"));
-                    spans.push(desc_span(" disconnect  "));
-                    spans.push(key_span("Tab"));
-                    spans.push(desc_span(" focus  "));
+            if app.input_mode == InputMode::SsmInput {
+                spans.push(key_span("Enter"));
+                spans.push(desc_span(" send  "));
+                spans.push(key_span("S+↑↓"));
+                spans.push(desc_span(" scroll  "));
+                spans.push(key_span("Ctrl+D"));
+                spans.push(desc_span(" disconnect  "));
+                spans.push(key_span("Esc"));
+                spans.push(desc_span(" back  "));
+            } else {
+                use crate::instances::InstanceFocus;
+                match app.instances_state.focus {
+                    InstanceFocus::RegionList => {
+                        spans.push(key_span("Enter"));
+                        spans.push(desc_span(" open region  "));
+                        spans.push(key_span("Tab"));
+                        spans.push(desc_span(" focus  "));
+                    }
+                    InstanceFocus::InstanceList => {
+                        spans.push(key_span("↑↓"));
+                        spans.push(desc_span(" select  "));
+                        spans.push(key_span("Enter"));
+                        spans.push(desc_span(" connect  "));
+                        spans.push(key_span("r"));
+                        spans.push(desc_span(" refresh  "));
+                        spans.push(key_span("Tab"));
+                        spans.push(desc_span(" focus  "));
+                    }
+                    InstanceFocus::SsmTerminal => {
+                        spans.push(key_span("i"));
+                        spans.push(desc_span(" type  "));
+                        spans.push(key_span("Tab"));
+                        spans.push(desc_span(" focus  "));
+                    }
                 }
             }
         }

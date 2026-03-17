@@ -45,6 +45,7 @@ pub struct InstancesState {
 
     // Focus
     pub focus: InstanceFocus,
+    pub region_dropdown_open: bool,
 
     // SSM connection (right panel)
     pub ssm_status: SsmConnectionStatus,
@@ -85,6 +86,7 @@ impl InstancesState {
             selected_instance: 0,
             loading_instances: false,
             focus: InstanceFocus::InstanceList,
+            region_dropdown_open: false,
             ssm_status: SsmConnectionStatus::Disconnected,
             ssm_output: Vec::new(),
             ssm_input: String::new(),

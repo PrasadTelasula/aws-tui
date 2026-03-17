@@ -568,18 +568,56 @@ fn draw_instances(f: &mut Frame, area: Rect, app: &App) {
     }
     f.render_widget(List::new(items), left_split[1]);
 
-    // Right panel: SSM terminal
-    let ssm_active = is.focus == InstanceFocus::SsmTerminal;
-    let _ssm_border = if ssm_active { BLUE } else { FG4 };
+    // Right panel: SSM terminals
+    // Layout: [session tabs (1, only when sessions exist)] [terminal (min)] [status bar (1)]
+    let has_sessions = !is.ssm_sessions.is_empty();
+    let right_split = if has_sessions {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(3), Constraint::Length(1)])
+            .split(right_area)
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(3), Constraint::Length(1)])
+            .split(right_area)
+    };
 
-    let right_split = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(1)])
-        .split(right_area);
+    // Session tab bar (only when sessions exist)
+    let (term_area, status_area) = if has_sessions {
+        let tab_area = right_split[0];
+        let term_area = right_split[1];
+        let status_area = right_split[2];
 
-    // SSM terminal — render vt100 parser screen
-    if let Some(ref parser) = is.pty_parser {
-        let screen = parser.screen();
+        let mut spans: Vec<Span> = Vec::new();
+        for (i, session) in is.ssm_sessions.iter().enumerate() {
+            let active = i == is.active_session_idx;
+            // Truncate name to keep tab bar compact
+            let name: String = session.instance_name.chars().take(14).collect();
+            let label = format!(" {} ", name);
+            let dot = if session.status == SsmConnectionStatus::Connected { "● " } else { "○ " };
+            let dot_color = if session.status == SsmConnectionStatus::Connected { GREEN } else { FG3 };
+            if active {
+                spans.push(Span::styled(dot, Style::default().fg(dot_color).bg(BG_HL)));
+                spans.push(Span::styled(label, Style::default().fg(FG).bg(BG_HL).add_modifier(Modifier::BOLD)));
+            } else {
+                spans.push(Span::styled(dot, Style::default().fg(dot_color).bg(BG_BAR)));
+                spans.push(Span::styled(label, Style::default().fg(FG2).bg(BG_BAR)));
+            }
+            spans.push(Span::styled("│", Style::default().fg(FG4).bg(BG_BAR)));
+        }
+        f.render_widget(
+            Paragraph::new(Line::from(spans)).style(Style::default().bg(BG_BAR)),
+            tab_area,
+        );
+        (term_area, status_area)
+    } else {
+        (right_split[0], right_split[1])
+    };
+
+    // Terminal area — render the active session's vt100 screen
+    if let Some(session) = is.active_session() {
+        let screen = session.parser.screen();
         let (screen_rows, screen_cols) = screen.size();
 
         let mut lines: Vec<Line> = Vec::new();
@@ -620,49 +658,42 @@ fn draw_instances(f: &mut Frame, area: Rect, app: &App) {
             lines.push(Line::from(spans));
         }
 
-        f.render_widget(Paragraph::new(lines), right_split[0]);
+        f.render_widget(Paragraph::new(lines), term_area);
 
-        // Show cursor inside the PTY panel
+        // Cursor
         let (crow, ccol) = screen.cursor_position();
-        let cx = right_split[0].x + ccol as u16;
-        let cy = right_split[0].y + crow as u16;
-        if cx < right_split[0].x + right_split[0].width
-            && cy < right_split[0].y + right_split[0].height
-        {
+        let cx = term_area.x + ccol as u16;
+        let cy = term_area.y + crow as u16;
+        if cx < term_area.x + term_area.width && cy < term_area.y + term_area.height {
             f.set_cursor_position((cx, cy));
         }
     } else {
-        // No active session — show hint
-        let status_text = match &is.ssm_status {
-            SsmConnectionStatus::Disconnected => "  Select an instance and press Enter to connect",
-            SsmConnectionStatus::Connecting => "  Connecting…",
-            SsmConnectionStatus::Connected => "  Connected",
-            SsmConnectionStatus::Error(e) => e.as_str(),
+        // No sessions — show hint
+        let hint = if let Some(ref err) = is.last_error {
+            format!("  Error: {}", err)
+        } else {
+            "  Select an instance and press Enter to connect".to_string()
         };
         f.render_widget(
-            Paragraph::new(Span::styled(status_text, Style::default().fg(FG3))),
-            right_split[0],
+            Paragraph::new(Span::styled(hint, Style::default().fg(FG3))),
+            term_area,
         );
     }
 
-    // SSM status bar
-    let status_label = match &is.ssm_status {
-        SsmConnectionStatus::Connected => {
-            if !is.instances.is_empty() {
-                let inst = &is.instances[is.selected_instance.min(is.instances.len().saturating_sub(1))];
-                format!(" [{}]  Ctrl+D: disconnect  F1/F2: switch tab", inst.instance_id)
-            } else {
-                " Connected  Ctrl+D: disconnect".to_string()
-            }
+    // Status bar
+    let status_label = if has_sessions {
+        if is.ssm_sessions.len() > 1 {
+            "  F4/F5: switch session  [/]: nav  Ctrl+D: close  Tab: focus".to_string()
+        } else {
+            "  Ctrl+D: close  Tab: focus  Enter: new session".to_string()
         }
-        SsmConnectionStatus::Disconnected => "  Enter: connect  Tab: focus".to_string(),
-        SsmConnectionStatus::Connecting => "  Connecting…".to_string(),
-        SsmConnectionStatus::Error(e) => format!(" Error: {}", e),
+    } else {
+        "  Enter: connect  Tab: focus".to_string()
     };
-    let status_style = Style::default().bg(BG_BAR).fg(FG3);
     f.render_widget(
-        Paragraph::new(Span::styled(status_label, status_style)),
-        right_split[1],
+        Paragraph::new(Span::styled(status_label, Style::default().fg(FG3)))
+            .style(Style::default().bg(BG_BAR)),
+        status_area,
     );
 
     // Region dropdown popup
@@ -1218,6 +1249,8 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
                     InstanceFocus::SsmTerminal => {
                         spans.push(key_span("i"));
                         spans.push(desc_span(" type  "));
+                        spans.push(key_span("[/]"));
+                        spans.push(desc_span(" sessions  "));
                         spans.push(key_span("Tab"));
                         spans.push(desc_span(" focus  "));
                     }

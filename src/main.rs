@@ -183,7 +183,9 @@ async fn run_app(
                 let inner_w = size.width.saturating_sub(2);
                 let left_w = (inner_w * 36) / 100;
                 let pty_cols = inner_w.saturating_sub(left_w + 1);
-                let pty_rows = size.height.saturating_sub(9);
+                // Session tab bar adds 1 row when sessions are open
+                let tab_row: u16 = if app.instances_state.ssm_sessions.is_empty() { 0 } else { 1 };
+                let pty_rows = size.height.saturating_sub(9 + tab_row);
                 app.instances_state.resize_pty(pty_rows.max(4), pty_cols.max(20));
             }
         }
@@ -354,12 +356,18 @@ async fn run_app(
                 // ── SSM Input mode (Instances tab) — forward raw bytes to PTY ──
                 if app.input_mode == InputMode::SsmInput {
                     match key.code {
-                        // Ctrl+D: disconnect and exit SSM mode
+                        // Ctrl+D: close active session
                         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             app.instances_state.disconnect_ssm();
-                            app.input_mode = InputMode::Normal;
+                            if app.instances_state.ssm_sessions.is_empty() {
+                                app.input_mode = InputMode::Normal;
+                                app.instances_state.focus = instances::InstanceFocus::InstanceList;
+                            }
                         }
-                        // Tab: cycle focus (don't send to PTY)
+                        // F4 / F5: switch between open sessions (no conflict — F1-F3 are global)
+                        KeyCode::F(4) => { app.instances_state.prev_session(); }
+                        KeyCode::F(5) => { app.instances_state.next_session(); }
+                        // Tab: exit SSM input, cycle focus
                         KeyCode::Tab => {
                             app.input_mode = InputMode::Normal;
                             app.instances_state.cycle_focus();
@@ -470,8 +478,17 @@ async fn run_app(
                         app.instances_state.fetch_instances();
                     }
                     KeyCode::Char('i') if app.active_tab == AppTab::Instances => {
-                        app.instances_state.focus = instances::InstanceFocus::SsmTerminal;
-                        app.input_mode = InputMode::SsmInput;
+                        if !app.instances_state.ssm_sessions.is_empty() {
+                            app.instances_state.focus = instances::InstanceFocus::SsmTerminal;
+                            app.input_mode = InputMode::SsmInput;
+                        }
+                    }
+                    // [ / ] — cycle between open SSM sessions in normal mode
+                    KeyCode::Char('[') if app.active_tab == AppTab::Instances => {
+                        app.instances_state.prev_session();
+                    }
+                    KeyCode::Char(']') if app.active_tab == AppTab::Instances => {
+                        app.instances_state.next_session();
                     }
                     KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL)
                         && app.active_tab == AppTab::Instances =>

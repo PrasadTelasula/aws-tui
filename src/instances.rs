@@ -28,6 +28,17 @@ pub enum SsmConnectionStatus {
     Error(String),
 }
 
+/// One live PTY session to a single EC2 instance.
+pub struct SsmSession {
+    pub instance_id: String,
+    pub instance_name: String,
+    pub parser: vt100::Parser,
+    pub status: SsmConnectionStatus,
+    writer: Box<dyn std::io::Write + Send>,
+    master: Box<dyn portable_pty::MasterPty + Send>,
+    bytes_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+}
+
 pub struct InstancesState {
     // Profile
     pub profiles: Vec<String>,
@@ -46,14 +57,11 @@ pub struct InstancesState {
     pub focus: InstanceFocus,
     pub region_dropdown_open: bool,
 
-    // SSM connection (right panel) — PTY-based
-    pub ssm_status: SsmConnectionStatus,
-    pub pty_parser: Option<vt100::Parser>,
-    pty_writer: Option<Box<dyn std::io::Write + Send>>,
-    pty_master: Option<Box<dyn portable_pty::MasterPty + Send>>,
-    pub pty_size: (u16, u16), // (rows, cols)
-    pty_bytes_tx: mpsc::UnboundedSender<Vec<u8>>,
-    pty_bytes_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    // SSM sessions (right panel) — one PTY per connected instance
+    pub ssm_sessions: Vec<SsmSession>,
+    pub active_session_idx: usize,
+    pub pty_size: (u16, u16),        // shared panel size used for new sessions + resize
+    pub last_error: Option<String>,  // last connection error to show in hint area
 
     // Channel for instance fetch results
     fetch_tx: mpsc::UnboundedSender<Vec<Ec2Instance>>,
@@ -69,7 +77,6 @@ pub enum InstanceFocus {
 
 impl InstancesState {
     pub fn new() -> Self {
-        let (pty_bytes_tx, pty_bytes_rx) = mpsc::unbounded_channel();
         let (fetch_tx, fetch_rx) = mpsc::unbounded_channel();
 
         Self {
@@ -82,13 +89,10 @@ impl InstancesState {
             loading_instances: false,
             focus: InstanceFocus::InstanceList,
             region_dropdown_open: false,
-            ssm_status: SsmConnectionStatus::Disconnected,
-            pty_parser: None,
-            pty_writer: None,
-            pty_master: None,
+            ssm_sessions: Vec::new(),
+            active_session_idx: 0,
             pty_size: (24, 80),
-            pty_bytes_tx,
-            pty_bytes_rx,
+            last_error: None,
             fetch_tx,
             fetch_rx,
         }
@@ -154,22 +158,53 @@ impl InstancesState {
         };
     }
 
-    /// Process incoming PTY bytes and instance fetch results
+    // ── Session navigation ──────────────────────────────────────────
+
+    pub fn active_session(&self) -> Option<&SsmSession> {
+        self.ssm_sessions.get(self.active_session_idx)
+    }
+
+    pub fn active_session_mut(&mut self) -> Option<&mut SsmSession> {
+        self.ssm_sessions.get_mut(self.active_session_idx)
+    }
+
+    pub fn next_session(&mut self) {
+        if self.ssm_sessions.len() > 1 {
+            self.active_session_idx = (self.active_session_idx + 1) % self.ssm_sessions.len();
+        }
+    }
+
+    pub fn prev_session(&mut self) {
+        if self.ssm_sessions.len() > 1 {
+            self.active_session_idx = if self.active_session_idx == 0 {
+                self.ssm_sessions.len() - 1
+            } else {
+                self.active_session_idx - 1
+            };
+        }
+    }
+
+    pub fn switch_to_session(&mut self, idx: usize) {
+        if idx < self.ssm_sessions.len() {
+            self.active_session_idx = idx;
+        }
+    }
+
+    // ── Tick ────────────────────────────────────────────────────────
+
+    /// Drain PTY output from every session into their parsers.
     pub fn tick(&mut self) {
-        while let Ok(bytes) = self.pty_bytes_rx.try_recv() {
-            if bytes.is_empty() {
-                // EOF signal — child exited
-                self.ssm_status = SsmConnectionStatus::Disconnected;
-                self.pty_master = None;
-                self.pty_writer = None;
-                continue;
-            }
-            if let Some(ref mut parser) = self.pty_parser {
-                parser.process(&bytes);
+        for session in &mut self.ssm_sessions {
+            while let Ok(bytes) = session.bytes_rx.try_recv() {
+                if bytes.is_empty() {
+                    session.status = SsmConnectionStatus::Disconnected;
+                } else {
+                    session.parser.process(&bytes);
+                }
             }
         }
 
-        // Process fetch results
+        // Process instance fetch results
         while let Ok(instances) = self.fetch_rx.try_recv() {
             self.instances = instances;
             self.selected_instance = 0;
@@ -177,7 +212,8 @@ impl InstancesState {
         }
     }
 
-    /// Fetch instances for the current profile + region
+    // ── Instance fetching ───────────────────────────────────────────
+
     pub fn fetch_instances(&mut self) {
         let profile = match self.active_profile() {
             Some(p) => p.to_string(),
@@ -222,24 +258,30 @@ impl InstancesState {
         });
     }
 
-    /// Connect to the selected instance via SSM using a PTY
-    pub fn connect_ssm(&mut self, rows: u16, cols: u16) {
-        // Disconnect any existing session first
-        self.disconnect_ssm();
+    // ── SSM PTY sessions ────────────────────────────────────────────
 
+    /// Connect to the selected instance. If already connected, switch to that session.
+    pub fn connect_ssm(&mut self, rows: u16, cols: u16) {
         if self.instances.is_empty() {
             return;
         }
 
         let instance = &self.instances[self.selected_instance];
         let instance_id = instance.instance_id.clone();
+        let instance_name = instance.name.clone();
+
+        // Already connected to this instance — just switch focus to it.
+        if let Some(idx) = self.ssm_sessions.iter().position(|s| s.instance_id == instance_id) {
+            self.active_session_idx = idx;
+            self.last_error = None;
+            return;
+        }
+
         let profile = match self.active_profile() {
             Some(p) => p.to_string(),
             None => return,
         };
         let region = self.active_region().to_string();
-
-        self.ssm_status = SsmConnectionStatus::Connecting;
 
         let pty_system = portable_pty::native_pty_system();
         let pair = match pty_system.openpty(portable_pty::PtySize {
@@ -250,18 +292,22 @@ impl InstancesState {
         }) {
             Ok(p) => p,
             Err(e) => {
-                self.ssm_status = SsmConnectionStatus::Error(e.to_string());
+                self.last_error = Some(e.to_string());
                 return;
             }
         };
 
         let mut cmd = portable_pty::CommandBuilder::new("aws");
-        cmd.args(["ssm", "start-session", "--target", &instance_id, "--region", &region, "--profile", &profile]);
+        cmd.args(["ssm", "start-session",
+            "--target", &instance_id,
+            "--region", &region,
+            "--profile", &profile,
+        ]);
 
         let child = match pair.slave.spawn_command(cmd) {
             Ok(c) => c,
             Err(e) => {
-                self.ssm_status = SsmConnectionStatus::Error(e.to_string());
+                self.last_error = Some(e.to_string());
                 return;
             }
         };
@@ -269,7 +315,7 @@ impl InstancesState {
         let writer = match pair.master.take_writer() {
             Ok(w) => w,
             Err(e) => {
-                self.ssm_status = SsmConnectionStatus::Error(e.to_string());
+                self.last_error = Some(e.to_string());
                 return;
             }
         };
@@ -277,69 +323,79 @@ impl InstancesState {
         let reader = match pair.master.try_clone_reader() {
             Ok(r) => r,
             Err(e) => {
-                self.ssm_status = SsmConnectionStatus::Error(e.to_string());
+                self.last_error = Some(e.to_string());
                 return;
             }
         };
 
-        let tx = self.pty_bytes_tx.clone();
+        let (bytes_tx, bytes_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
             let mut reader = reader;
             loop {
                 match std::io::Read::read(&mut reader, &mut buf) {
                     Ok(0) | Err(_) => {
-                        let _ = tx.send(vec![]); // empty = EOF signal
+                        let _ = bytes_tx.send(vec![]); // EOF signal
                         break;
                     }
                     Ok(n) => {
-                        let _ = tx.send(buf[..n].to_vec());
+                        let _ = bytes_tx.send(buf[..n].to_vec());
                     }
                 }
             }
-            drop(child); // wait for child implicitly
+            drop(child);
         });
 
-        self.pty_parser = Some(vt100::Parser::new(rows, cols, 1000));
-        self.pty_writer = Some(writer);
-        self.pty_master = Some(pair.master);
+        self.ssm_sessions.push(SsmSession {
+            instance_id,
+            instance_name,
+            parser: vt100::Parser::new(rows, cols, 1000),
+            status: SsmConnectionStatus::Connected,
+            writer,
+            master: pair.master,
+            bytes_rx,
+        });
+        self.active_session_idx = self.ssm_sessions.len() - 1;
         self.pty_size = (rows, cols);
-        self.ssm_status = SsmConnectionStatus::Connected;
+        self.last_error = None;
     }
 
-    /// Disconnect SSM session
+    /// Disconnect the currently active session and remove it.
     pub fn disconnect_ssm(&mut self) {
-        // Dropping the master sends HUP to slave → child exits → reader thread gets EOF
-        self.pty_master = None;
-        self.pty_writer = None;
-        self.pty_parser = None;
-        self.ssm_status = SsmConnectionStatus::Disconnected;
-    }
-
-    /// Write raw bytes to the PTY
-    pub fn write_input(&mut self, bytes: &[u8]) {
-        if let Some(ref mut writer) = self.pty_writer {
-            let _ = std::io::Write::write_all(writer, bytes);
-            let _ = std::io::Write::flush(writer);
+        if self.ssm_sessions.is_empty() {
+            return;
+        }
+        // Dropping the session drops master → HUP → child exits → reader thread exits.
+        self.ssm_sessions.remove(self.active_session_idx);
+        if !self.ssm_sessions.is_empty() && self.active_session_idx >= self.ssm_sessions.len() {
+            self.active_session_idx = self.ssm_sessions.len() - 1;
         }
     }
 
-    /// Resize the PTY and parser
+    /// Write raw input bytes to the active session's PTY.
+    pub fn write_input(&mut self, bytes: &[u8]) {
+        if let Some(session) = self.ssm_sessions.get_mut(self.active_session_idx) {
+            if session.status == SsmConnectionStatus::Connected {
+                let _ = std::io::Write::write_all(&mut session.writer, bytes);
+                let _ = std::io::Write::flush(&mut session.writer);
+            }
+        }
+    }
+
+    /// Resize all session PTYs and parsers to match the current panel size.
     pub fn resize_pty(&mut self, rows: u16, cols: u16) {
         if self.pty_size == (rows, cols) {
             return;
         }
         self.pty_size = (rows, cols);
-        if let Some(ref master) = self.pty_master {
-            let _ = master.resize(portable_pty::PtySize {
+        for session in &mut self.ssm_sessions {
+            let _ = session.master.resize(portable_pty::PtySize {
                 rows,
                 cols,
                 pixel_width: 0,
                 pixel_height: 0,
             });
-        }
-        if let Some(ref mut parser) = self.pty_parser {
-            parser.set_size(rows, cols);
+            session.parser.set_size(rows, cols);
         }
     }
 }

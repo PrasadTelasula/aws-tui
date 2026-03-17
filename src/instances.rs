@@ -517,13 +517,19 @@ async fn try_start_session(
         .spawn()
         .map_err(|e| format!("Failed to start session: {}", e))?;
 
-    // Write command + exit to stdin
+    // Write command + exit to stdin after session initializes
     if let Some(mut stdin) = child.stdin.take() {
-        // Small delay to let the session initialize
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        // Wait for session-manager-plugin to complete its WebSocket handshake
+        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
         let script = format!("{}\nexit\n", cmd);
-        let _ = stdin.write_all(script.as_bytes()).await;
-        let _ = stdin.flush().await;
+        stdin
+            .write_all(script.as_bytes())
+            .await
+            .map_err(|e| format!("Failed to write to session stdin: {}", e))?;
+        stdin
+            .flush()
+            .await
+            .map_err(|e| format!("Failed to flush session stdin: {}", e))?;
         drop(stdin);
     }
 

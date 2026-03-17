@@ -104,12 +104,16 @@ impl SessionManager {
             s.output_lines.push(format!(">>> Starting: {}", command));
 
             let shell_command = quote_parameters_for_shell(command);
+            let stdin_cfg = match kind {
+                SessionKind::SsmSession => Stdio::piped(),
+                _ => Stdio::null(),
+            };
             let mut child = Command::new("sh")
                 .arg("-c")
                 .arg(&shell_command)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
-                .stdin(Stdio::null())
+                .stdin(stdin_cfg)
                 .kill_on_drop(true)
                 .spawn()
                 .map_err(|e| format!("Failed to spawn: {}", e))?;

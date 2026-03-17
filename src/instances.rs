@@ -227,12 +227,13 @@ impl InstancesState {
                     tell current session of current window\n\
                         set newSession to (split vertically with default profile)\n\
                         tell newSession\n\
-                            set name to \"{}\"\n\
+                            delay 0.3\n\
                             write text \"{}\"\n\
+                            set name to \"{}\"\n\
                         end tell\n\
                     end tell\n\
                 end tell",
-                set_name, ssm_cmd
+                ssm_cmd, set_name
             )
         } else {
             // Terminal.app: new window

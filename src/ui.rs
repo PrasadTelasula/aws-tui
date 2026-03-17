@@ -281,10 +281,23 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
             spans.push(Span::styled(format!(" :{}", p), Style::default().fg(TEAL)));
         }
 
-        if matches!(status, SessionStatus::Running | SessionStatus::Connected) {
+        if matches!(status, SessionStatus::Running) {
             if let Some(u) = app.session_uptime(&alias.name) {
                 spans.push(Span::styled(format!("  {}", u), Style::default().fg(FG3)));
             }
+        }
+
+        // SSO: show token remaining time
+        if matches!(status, SessionStatus::Connected) {
+            if let Some(remaining) = app.token_remaining_str(&alias.name) {
+                spans.push(Span::styled(
+                    format!("  {} left", remaining),
+                    Style::default().fg(TEAL),
+                ));
+            }
+        }
+        if matches!(status, SessionStatus::Expired) {
+            spans.push(Span::styled("  expired", Style::default().fg(AMBER)));
         }
 
         let row_bg = if selected {
@@ -437,6 +450,32 @@ fn draw_right(f: &mut Frame, area: Rect, app: &App) {
             v.push(Span::styled(format!("  up {}", u), Style::default().fg(FG3)));
         }
         lines.push(kv(ICON_COG, "PID", v));
+    }
+
+    // SSO token expiry details
+    if let Some((expires_at, remaining_secs)) = app.token_expiry.get(&a.name) {
+        let remaining_str = {
+            let h = remaining_secs / 3600;
+            let m = (remaining_secs % 3600) / 60;
+            let s = remaining_secs % 60;
+            if h > 0 { format!("{}h {:02}m", h, m) }
+            else if m > 0 { format!("{}m {:02}s", m, s) }
+            else { format!("{}s", s) }
+        };
+
+        let color = if *remaining_secs < 300 { AMBER } else { TEAL };
+
+        lines.push(kv(ICON_CLOCK, "Expires", vec![
+            Span::styled(expires_at.as_str(), Style::default().fg(FG2)),
+        ]));
+        lines.push(kv(ICON_CLOCK, "Remaining", vec![
+            Span::styled(remaining_str, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+            if *remaining_secs < 300 {
+                Span::styled("  ⚠ expiring soon", Style::default().fg(AMBER))
+            } else {
+                Span::raw("")
+            },
+        ]));
     }
 
     let max_cmd = (pad.width as usize).saturating_sub(16);

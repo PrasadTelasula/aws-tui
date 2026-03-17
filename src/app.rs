@@ -50,6 +50,8 @@ pub struct App {
     pub session_outputs: HashMap<String, Vec<String>>,
     pub session_pids: HashMap<usize, Option<u32>>,
     pub session_start_times: HashMap<String, Instant>,
+    /// SSO token expiry: (expires_at_str, remaining_secs)
+    pub token_expiry: HashMap<String, (String, u64)>,
     pub session_manager: SessionManager,
     pub output_tx: mpsc::UnboundedSender<(String, String)>,
     pub output_rx: mpsc::UnboundedReceiver<(String, String)>,
@@ -92,6 +94,7 @@ impl App {
             session_outputs: HashMap::new(),
             session_pids: HashMap::new(),
             session_start_times: HashMap::new(),
+            token_expiry: HashMap::new(),
             session_manager: SessionManager::new(),
             output_tx: tx,
             output_rx: rx,
@@ -145,6 +148,21 @@ impl App {
         } else {
             format!("{:02}:{:02}", mins, secs)
         }
+    }
+
+    /// Returns formatted token remaining time for SSO sessions
+    pub fn token_remaining_str(&self, alias_name: &str) -> Option<String> {
+        self.token_expiry.get(alias_name).map(|(_, secs)| {
+            let hours = secs / 3600;
+            let mins = (secs % 3600) / 60;
+            if hours > 0 {
+                format!("{}h {:02}m", hours, mins)
+            } else if mins > 0 {
+                format!("{}m", mins)
+            } else {
+                format!("{}s", secs)
+            }
+        })
     }
 
     pub fn session_uptime(&self, alias_name: &str) -> Option<String> {
@@ -344,6 +362,14 @@ impl App {
 
             let pid = self.session_manager.get_pid(&alias.name).await;
             self.session_pids.insert(i, pid);
+
+            // Fetch token expiry for SSO sessions
+            let (exp_str, exp_secs) = self.session_manager.get_token_expiry(&alias.name).await;
+            if let (Some(s), Some(r)) = (exp_str, exp_secs) {
+                self.token_expiry.insert(alias.name.clone(), (s, r));
+            } else {
+                self.token_expiry.remove(&alias.name);
+            }
 
             let output = self.session_manager.get_output(&alias.name).await;
             if !output.is_empty() {

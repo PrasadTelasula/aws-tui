@@ -14,7 +14,6 @@ fn quote_parameters_for_shell(command: &str) -> String {
     let re = Regex::new(r"--parameters\s+(\{.+\})").unwrap();
     if let Some(caps) = re.captures(command) {
         let json_val = &caps[1];
-        // Replace the bare JSON with a single-quoted version
         command.replace(json_val, &format!("'{}'", json_val))
     } else {
         command.to_string()
@@ -26,8 +25,8 @@ pub enum SessionStatus {
     Stopped,
     Starting,
     Running,
-    Connected,              // SSO: login succeeded, token is valid
-    Expired,                // SSO: token has expired
+    Connected,
+    Expired,
     Error(String),
 }
 
@@ -44,6 +43,9 @@ pub struct Session {
     pub pid: Option<u32>,
     pub output_lines: Vec<String>,
     pub _kind: SessionKind,
+    /// For SSO: when the token expires (human-readable) and remaining seconds
+    pub token_expires_at: Option<String>,
+    pub token_remaining_secs: Option<u64>,
     child: Option<Child>,
 }
 
@@ -54,6 +56,8 @@ impl Session {
             pid: None,
             output_lines: Vec::new(),
             _kind: kind,
+            token_expires_at: None,
+            token_remaining_secs: None,
             child: None,
         }
     }
@@ -77,7 +81,6 @@ impl SessionManager {
         kind: SessionKind,
         output_tx: tokio::sync::mpsc::UnboundedSender<(String, String)>,
     ) -> Result<(), String> {
-        // If session exists and is running/connected, don't start again
         if let Some(session) = self.sessions.get(alias_name) {
             let s = session.lock().await;
             match s.status {
@@ -94,9 +97,10 @@ impl SessionManager {
             let mut s = session.lock().await;
             s.status = SessionStatus::Starting;
             s.output_lines.clear();
+            s.token_expires_at = None;
+            s.token_remaining_secs = None;
             s.output_lines.push(format!(">>> Starting: {}", command));
 
-            // Properly quote JSON parameters for shell execution
             let shell_command = quote_parameters_for_shell(command);
             let mut child = Command::new("sh")
                 .arg("-c")
@@ -109,10 +113,8 @@ impl SessionManager {
                 .map_err(|e| format!("Failed to spawn: {}", e))?;
 
             s.pid = child.id();
-
             let stdout = child.stdout.take();
             let stderr = child.stderr.take();
-
             s.child = Some(child);
             s.status = SessionStatus::Running;
 
@@ -144,7 +146,6 @@ impl SessionManager {
             }
         }
 
-        // Monitor process exit
         let session_clone = session.clone();
         let kind_clone = kind;
         tokio::spawn(async move {
@@ -158,16 +159,30 @@ impl SessionManager {
                             s.pid = None;
 
                             if exit_status.success() {
-                                // SSO: process exits on success, but session is alive
                                 if let SessionKind::SsoLogin { ref session_name } = kind_clone {
                                     s.status = SessionStatus::Connected;
                                     s.output_lines.push(format!(
                                         ">>> SSO login succeeded (session: {})",
                                         session_name
                                     ));
-                                    s.output_lines.push(
-                                        ">>> Token cached — monitoring expiry".to_string(),
-                                    );
+
+                                    // Immediately check token expiry
+                                    match check_sso_token(session_name) {
+                                        SsoTokenState::Valid { expires_in, expires_at_str } => {
+                                            s.token_expires_at = Some(expires_at_str.clone());
+                                            s.token_remaining_secs = Some(expires_in.as_secs());
+                                            let remaining = format_duration(expires_in.as_secs());
+                                            s.output_lines.push(format!(
+                                                ">>> Token expires at {} ({} remaining)",
+                                                expires_at_str, remaining
+                                            ));
+                                        }
+                                        _ => {
+                                            s.output_lines.push(
+                                                ">>> Token cached (could not read expiry from cache)".to_string(),
+                                            );
+                                        }
+                                    }
                                 } else {
                                     s.status = SessionStatus::Stopped;
                                     s.output_lines
@@ -183,7 +198,7 @@ impl SessionManager {
                             }
                             break;
                         }
-                        Ok(None) => {} // still running
+                        Ok(None) => {}
                         Err(e) => {
                             s.status = SessionStatus::Error(format!("Monitor error: {}", e));
                             break;
@@ -212,9 +227,10 @@ impl SessionManager {
         if let Some(session) = self.sessions.get(alias_name) {
             let mut s = session.lock().await;
 
-            // If it's a connected SSO session (no child process), just mark stopped
             if matches!(s.status, SessionStatus::Connected) {
                 s.status = SessionStatus::Stopped;
+                s.token_expires_at = None;
+                s.token_remaining_secs = None;
                 s.output_lines.push(">>> SSO session dismissed".to_string());
                 return Ok(());
             }
@@ -231,8 +247,9 @@ impl SessionManager {
                 s.pid = None;
                 Ok(())
             } else {
-                // No child but might be in an error/expired state — just reset
                 s.status = SessionStatus::Stopped;
+                s.token_expires_at = None;
+                s.token_remaining_secs = None;
                 Ok(())
             }
         } else {
@@ -267,6 +284,16 @@ impl SessionManager {
         }
     }
 
+    /// Returns (expires_at_str, remaining_seconds) for SSO sessions
+    pub async fn get_token_expiry(&self, alias_name: &str) -> (Option<String>, Option<u64>) {
+        if let Some(session) = self.sessions.get(alias_name) {
+            let s = session.lock().await;
+            (s.token_expires_at.clone(), s.token_remaining_secs)
+        } else {
+            (None, None)
+        }
+    }
+
     pub async fn append_output(&self, alias_name: &str, line: String) {
         if let Some(session) = self.sessions.get(alias_name) {
             let mut s = session.lock().await;
@@ -287,8 +314,6 @@ impl SessionManager {
 }
 
 // ─── SSO Token Cache Watcher ────────────────────────────────────────
-// After SSO login succeeds, periodically check ~/.aws/sso/cache/ for
-// token expiry. When the token expires, update status to Expired.
 
 async fn sso_token_watcher(session: Arc<Mutex<Session>>, session_name: String) {
     loop {
@@ -299,40 +324,44 @@ async fn sso_token_watcher(session: Arc<Mutex<Session>>, session_name: String) {
             s.status.clone()
         };
 
-        // Only keep watching if Connected
         if status != SessionStatus::Connected {
             break;
         }
 
         match check_sso_token(&session_name) {
-            SsoTokenState::Valid { expires_in } => {
+            SsoTokenState::Valid { expires_in, expires_at_str } => {
                 let mut s = session.lock().await;
+                s.token_remaining_secs = Some(expires_in.as_secs());
+                s.token_expires_at = Some(expires_at_str);
+
                 if expires_in.as_secs() < 300 {
-                    // Less than 5 minutes left
-                    let mins = expires_in.as_secs() / 60;
+                    let remaining = format_duration(expires_in.as_secs());
                     s.output_lines.push(format!(
-                        ">>> Warning: token expires in {} min",
-                        mins
+                        ">>> Warning: token expires in {}",
+                        remaining
                     ));
                 }
             }
             SsoTokenState::Expired => {
                 let mut s = session.lock().await;
                 s.status = SessionStatus::Expired;
+                s.token_remaining_secs = Some(0);
                 s.output_lines
                     .push(">>> SSO token has expired — re-login required".to_string());
                 break;
             }
             SsoTokenState::NotFound => {
-                // Cache file not found — might be a different cache structure
-                // Keep status as Connected, don't break
+                // Cache file not found — keep Connected, don't falsely expire
             }
         }
     }
 }
 
 enum SsoTokenState {
-    Valid { expires_in: std::time::Duration },
+    Valid {
+        expires_in: std::time::Duration,
+        expires_at_str: String,
+    },
     Expired,
     NotFound,
 }
@@ -349,6 +378,15 @@ fn check_sso_token(session_name: &str) -> SsoTokenState {
 
     let session_lower = session_name.to_lowercase();
 
+    // Collect ALL matching tokens, pick the one with the latest expiry
+    let mut best_valid: Option<(u64, String)> = None; // (expires_at_unix, expires_at_str)
+    let mut found_any = false;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
@@ -360,44 +398,74 @@ fn check_sso_token(session_name: &str) -> SsoTokenState {
             Err(_) => continue,
         };
 
-        // Check if this cache file belongs to our SSO session
-        // AWS SSO cache files contain startUrl or session name info
+        // Only match files that contain our specific session name
         let content_lower = content.to_lowercase();
-        let is_match = content_lower.contains(&session_lower)
-            || content_lower.contains("accesstoken");
-
-        if !is_match {
+        if !content_lower.contains(&session_lower) {
             continue;
         }
 
-        // Parse expiresAt
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(expires_str) = parsed.get("expiresAt").and_then(|v| v.as_str()) {
-                // Parse ISO 8601: "2024-01-15T12:00:00UTC" or "2024-01-15T12:00:00Z"
-                if let Some(expires_at) = parse_iso8601(expires_str) {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
+        let parsed = match serde_json::from_str::<serde_json::Value>(&content) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
 
-                    if expires_at > now {
-                        return SsoTokenState::Valid {
-                            expires_in: std::time::Duration::from_secs(expires_at - now),
-                        };
-                    } else {
-                        return SsoTokenState::Expired;
+        // Must have accessToken to be a valid SSO token file
+        if parsed.get("accessToken").is_none() {
+            continue;
+        }
+
+        let expires_str = match parsed.get("expiresAt").and_then(|v| v.as_str()) {
+            Some(s) => s,
+            None => continue,
+        };
+
+        found_any = true;
+
+        if let Some(expires_at) = parse_iso8601(expires_str) {
+            if expires_at > now {
+                // Valid token — keep the one with latest expiry
+                match best_valid {
+                    Some((best_ts, _)) if expires_at > best_ts => {
+                        best_valid = Some((expires_at, expires_str.to_string()));
                     }
+                    None => {
+                        best_valid = Some((expires_at, expires_str.to_string()));
+                    }
+                    _ => {}
                 }
             }
         }
     }
 
-    SsoTokenState::NotFound
+    if let Some((expires_at, expires_at_str)) = best_valid {
+        SsoTokenState::Valid {
+            expires_in: std::time::Duration::from_secs(expires_at - now),
+            expires_at_str,
+        }
+    } else if found_any {
+        // Found matching files but all expired
+        SsoTokenState::Expired
+    } else {
+        SsoTokenState::NotFound
+    }
+}
+
+/// Format seconds into human-readable: "2h 15m", "45m 30s", "30s"
+fn format_duration(secs: u64) -> String {
+    let hours = secs / 3600;
+    let mins = (secs % 3600) / 60;
+    let s = secs % 60;
+    if hours > 0 {
+        format!("{}h {:02}m", hours, mins)
+    } else if mins > 0 {
+        format!("{}m {:02}s", mins, s)
+    } else {
+        format!("{}s", s)
+    }
 }
 
 /// Simple ISO 8601 parser — returns Unix timestamp
 fn parse_iso8601(s: &str) -> Option<u64> {
-    // Handles: "2024-01-15T12:30:00Z", "2024-01-15T12:30:00UTC"
     let s = s.trim().replace("UTC", "Z").replace("utc", "Z");
     let s = s.trim_end_matches('Z');
 
@@ -407,7 +475,7 @@ fn parse_iso8601(s: &str) -> Option<u64> {
     }
 
     let date_parts: Vec<u64> = parts[0].split('-').filter_map(|p| p.parse().ok()).collect();
-    let time_str = parts[1].split('+').next().unwrap_or(parts[1]); // strip timezone offset
+    let time_str = parts[1].split('+').next().unwrap_or(parts[1]);
     let time_parts: Vec<u64> = time_str.split(':').filter_map(|p| p.parse().ok()).collect();
 
     if date_parts.len() != 3 || time_parts.len() < 2 {
@@ -418,12 +486,15 @@ fn parse_iso8601(s: &str) -> Option<u64> {
     let (hour, minute) = (time_parts[0], time_parts[1]);
     let second = time_parts.get(2).copied().unwrap_or(0);
 
-    // Simplified days-from-epoch calculation
     let mut days: u64 = 0;
     for y in 1970..year {
         days += if is_leap(y) { 366 } else { 365 };
     }
-    let month_days = [31, 28 + if is_leap(year) { 1 } else { 0 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let month_days = [
+        31,
+        28 + if is_leap(year) { 1 } else { 0 },
+        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    ];
     for m in 0..(month as usize - 1).min(11) {
         days += month_days[m];
     }

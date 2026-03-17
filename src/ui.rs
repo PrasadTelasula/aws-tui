@@ -595,7 +595,9 @@ fn draw_instances(f: &mut Frame, area: Rect, app: &App) {
         let scroll = bottom.saturating_sub(is.ssm_scroll_offset);
 
         f.render_widget(
-            Paragraph::new(lines).scroll((scroll as u16, 0)),
+            Paragraph::new(lines)
+                .wrap(ratatui::widgets::Wrap { trim: false })
+                .scroll((scroll as u16, 0)),
             right_split[0],
         );
 

@@ -3,6 +3,38 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
+/// Strip ANSI escape sequences and carriage returns from SSM output.
+/// The session-manager-plugin sends raw terminal output that includes
+/// color codes (\x1b[...m), cursor sequences, and \r line endings —
+/// all of which scatter text when rendered in a ratatui Paragraph.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b {
+            i += 1;
+            if i < bytes.len() && bytes[i] == b'[' {
+                // CSI sequence — skip until a letter terminates it
+                i += 1;
+                while i < bytes.len() && !bytes[i].is_ascii_alphabetic() {
+                    i += 1;
+                }
+                i += 1;
+            } else {
+                // Other ESC sequence — skip one more byte
+                i += 1;
+            }
+        } else if bytes[i] == b'\r' {
+            i += 1;
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    out
+}
+
 /// AWS regions
 pub const REGIONS: &[&str] = &[
     "us-east-1", "us-east-2", "us-west-1", "us-west-2",
@@ -178,7 +210,9 @@ impl InstancesState {
                 self.ssm_child_stdin = None;
                 continue;
             }
-            self.ssm_output.push(line);
+            let clean = strip_ansi(&line);
+            if clean.trim().is_empty() { continue; }
+            self.ssm_output.push(clean);
             if self.ssm_output.len() > 1000 {
                 self.ssm_output.drain(..self.ssm_output.len() - 1000);
             }

@@ -150,21 +150,6 @@ impl App {
         }
     }
 
-    /// Returns formatted token remaining time for SSO sessions
-    pub fn token_remaining_str(&self, alias_name: &str) -> Option<String> {
-        self.token_expiry.get(alias_name).map(|(_, secs)| {
-            let hours = secs / 3600;
-            let mins = (secs % 3600) / 60;
-            if hours > 0 {
-                format!("{}h {:02}m", hours, mins)
-            } else if mins > 0 {
-                format!("{}m", mins)
-            } else {
-                format!("{}s", secs)
-            }
-        })
-    }
-
     pub fn session_uptime(&self, alias_name: &str) -> Option<String> {
         self.session_start_times.get(alias_name).map(|start| {
             let elapsed = start.elapsed().as_secs();

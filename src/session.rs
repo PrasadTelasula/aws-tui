@@ -1,7 +1,6 @@
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -43,7 +42,8 @@ pub struct Session {
     pub pid: Option<u32>,
     pub output_lines: Vec<String>,
     pub _kind: SessionKind,
-    /// For SSO: when the token expires (human-readable) and remaining seconds
+    /// SSO: profile used for sts check, and last check result
+    pub sso_profile: Option<String>,
     pub token_expires_at: Option<String>,
     pub token_remaining_secs: Option<u64>,
     child: Option<Child>,
@@ -56,6 +56,7 @@ impl Session {
             pid: None,
             output_lines: Vec::new(),
             _kind: kind,
+            sso_profile: None,
             token_expires_at: None,
             token_remaining_secs: None,
             child: None,
@@ -99,6 +100,7 @@ impl SessionManager {
             s.output_lines.clear();
             s.token_expires_at = None;
             s.token_remaining_secs = None;
+            s.sso_profile = None;
             s.output_lines.push(format!(">>> Starting: {}", command));
 
             let shell_command = quote_parameters_for_shell(command);
@@ -166,20 +168,22 @@ impl SessionManager {
                                         session_name
                                     ));
 
-                                    // Immediately check token expiry
-                                    match check_sso_token(session_name) {
-                                        SsoTokenState::Valid { expires_in, expires_at_str } => {
-                                            s.token_expires_at = Some(expires_at_str.clone());
-                                            s.token_remaining_secs = Some(expires_in.as_secs());
-                                            let remaining = format_duration(expires_in.as_secs());
+                                    // Resolve profile from ~/.aws/config
+                                    let profile = resolve_profile_for_sso_session(session_name);
+                                    match &profile {
+                                        Some(p) => {
+                                            s.sso_profile = Some(p.clone());
                                             s.output_lines.push(format!(
-                                                ">>> Token expires at {} ({} remaining)",
-                                                expires_at_str, remaining
+                                                ">>> Monitoring via: aws sts get-caller-identity --profile {}",
+                                                p
                                             ));
                                         }
-                                        _ => {
+                                        None => {
                                             s.output_lines.push(
-                                                ">>> Token cached (could not read expiry from cache)".to_string(),
+                                                ">>> No profile found for this sso-session in ~/.aws/config".to_string(),
+                                            );
+                                            s.output_lines.push(
+                                                ">>> Cannot monitor session liveness without a profile".to_string(),
                                             );
                                         }
                                     }
@@ -209,13 +213,18 @@ impl SessionManager {
                 }
             }
 
-            // For SSO sessions, start a token expiry watcher
-            if let SessionKind::SsoLogin { ref session_name } = kind_clone {
-                let sn = session_name.clone();
-                let sess = session_clone.clone();
-                tokio::spawn(async move {
-                    sso_token_watcher(sess, sn).await;
-                });
+            // For SSO sessions with a resolved profile, start liveness watcher
+            if let SessionKind::SsoLogin { .. } = kind_clone {
+                let profile = {
+                    let s = session_clone.lock().await;
+                    s.sso_profile.clone()
+                };
+                if let Some(profile) = profile {
+                    let sess = session_clone.clone();
+                    tokio::spawn(async move {
+                        sso_liveness_watcher(sess, profile).await;
+                    });
+                }
             }
         });
 
@@ -284,7 +293,6 @@ impl SessionManager {
         }
     }
 
-    /// Returns (expires_at_str, remaining_seconds) for SSO sessions
     pub async fn get_token_expiry(&self, alias_name: &str) -> (Option<String>, Option<u64>) {
         if let Some(session) = self.sessions.get(alias_name) {
             let s = session.lock().await;
@@ -313,12 +321,57 @@ impl SessionManager {
     }
 }
 
-// ─── SSO Token Cache Watcher ────────────────────────────────────────
+// ─── Resolve profile name from ~/.aws/config ────────────────────────
+// Parses ~/.aws/config to find a [profile X] that has sso_session = <name>
 
-async fn sso_token_watcher(session: Arc<Mutex<Session>>, session_name: String) {
+fn resolve_profile_for_sso_session(session_name: &str) -> Option<String> {
+    let config_path = dirs::home_dir()?.join(".aws/config");
+    let content = fs::read_to_string(config_path).ok()?;
+
+    let mut current_profile: Option<String> = None;
+    let target = session_name.to_lowercase();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // Match [profile xyz] or [default]
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            let inner = trimmed[1..trimmed.len() - 1].trim();
+            if inner.starts_with("profile ") {
+                current_profile = Some(inner["profile ".len()..].trim().to_string());
+            } else if inner == "default" {
+                current_profile = Some("default".to_string());
+            } else {
+                // Could be [sso-session ...] section — skip
+                current_profile = None;
+            }
+            continue;
+        }
+
+        // Match sso_session = <name>
+        if let Some(ref profile) = current_profile {
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let key = key.trim().to_lowercase();
+                let value = value.trim().to_lowercase();
+                if key == "sso_session" && value == target {
+                    return Some(profile.clone());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+// ─── SSO Liveness Watcher ───────────────────────────────────────────
+// Periodically runs `aws sts get-caller-identity --profile <profile>`
+// to verify the SSO session is still valid. This is the source of truth.
+
+async fn sso_liveness_watcher(session: Arc<Mutex<Session>>, profile: String) {
+    // Initial check after 5 seconds (give CLI time to cache credentials)
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
     loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-
         let status = {
             let s = session.lock().await;
             s.status.clone()
@@ -328,181 +381,112 @@ async fn sso_token_watcher(session: Arc<Mutex<Session>>, session_name: String) {
             break;
         }
 
-        match check_sso_token(&session_name) {
-            SsoTokenState::Valid { expires_in, expires_at_str } => {
-                let mut s = session.lock().await;
-                s.token_remaining_secs = Some(expires_in.as_secs());
-                s.token_expires_at = Some(expires_at_str);
+        // Run sts get-caller-identity to check liveness
+        let check_result = check_sts_identity(&profile).await;
 
-                if expires_in.as_secs() < 300 {
-                    let remaining = format_duration(expires_in.as_secs());
+        {
+            let mut s = session.lock().await;
+
+            // Re-check status in case it changed while we were awaiting
+            if s.status != SessionStatus::Connected {
+                break;
+            }
+
+            match check_result {
+                StsCheckResult::Valid { account, arn } => {
+                    s.token_expires_at = Some(format!("account: {}", account));
+                    // We don't know exact expiry from STS, but session is alive
+                    // Increment a "last verified" counter
+                    s.token_remaining_secs = None; // STS doesn't tell us remaining time
                     s.output_lines.push(format!(
-                        ">>> Warning: token expires in {}",
-                        remaining
+                        ">>> Session verified — {} ({})",
+                        arn, account
+                    ));
+                }
+                StsCheckResult::Expired { error } => {
+                    s.status = SessionStatus::Expired;
+                    s.token_remaining_secs = Some(0);
+                    s.output_lines.push(format!(
+                        ">>> SSO session expired — {}",
+                        error
+                    ));
+                    s.output_lines.push(
+                        ">>> Re-login required (press Enter)".to_string(),
+                    );
+                    break;
+                }
+                StsCheckResult::Error { error } => {
+                    // Transient error — don't mark expired, just log
+                    s.output_lines.push(format!(
+                        ">>> STS check failed: {} (will retry)",
+                        error
                     ));
                 }
             }
-            SsoTokenState::Expired => {
-                let mut s = session.lock().await;
-                s.status = SessionStatus::Expired;
-                s.token_remaining_secs = Some(0);
-                s.output_lines
-                    .push(">>> SSO token has expired — re-login required".to_string());
-                break;
-            }
-            SsoTokenState::NotFound => {
-                // Cache file not found — keep Connected, don't falsely expire
-            }
         }
+
+        // Check every 60 seconds
+        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
     }
 }
 
-enum SsoTokenState {
-    Valid {
-        expires_in: std::time::Duration,
-        expires_at_str: String,
-    },
-    Expired,
-    NotFound,
+enum StsCheckResult {
+    Valid { account: String, arn: String },
+    Expired { error: String },
+    Error { error: String },
 }
 
-fn check_sso_token(session_name: &str) -> SsoTokenState {
-    let cache_dir = dirs::home_dir()
-        .map(|h| h.join(".aws/sso/cache"))
-        .unwrap_or_else(|| PathBuf::from("/tmp"));
+async fn check_sts_identity(profile: &str) -> StsCheckResult {
+    let output = Command::new("aws")
+        .args(["sts", "get-caller-identity", "--profile", profile, "--output", "json"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .output()
+        .await;
 
-    let entries = match fs::read_dir(&cache_dir) {
-        Ok(e) => e,
-        Err(_) => return SsoTokenState::NotFound,
-    };
-
-    let session_lower = session_name.to_lowercase();
-
-    // Collect ALL matching tokens, pick the one with the latest expiry
-    let mut best_valid: Option<(u64, String)> = None; // (expires_at_unix, expires_at_str)
-    let mut found_any = false;
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
-            continue;
-        }
-
-        let content = match fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        // Only match files that contain our specific session name
-        let content_lower = content.to_lowercase();
-        if !content_lower.contains(&session_lower) {
-            continue;
-        }
-
-        let parsed = match serde_json::from_str::<serde_json::Value>(&content) {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-
-        // Must have accessToken to be a valid SSO token file
-        if parsed.get("accessToken").is_none() {
-            continue;
-        }
-
-        let expires_str = match parsed.get("expiresAt").and_then(|v| v.as_str()) {
-            Some(s) => s,
-            None => continue,
-        };
-
-        found_any = true;
-
-        if let Some(expires_at) = parse_iso8601(expires_str) {
-            if expires_at > now {
-                // Valid token — keep the one with latest expiry
-                match best_valid {
-                    Some((best_ts, _)) if expires_at > best_ts => {
-                        best_valid = Some((expires_at, expires_str.to_string()));
+    match output {
+        Ok(out) => {
+            if out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                // Parse JSON: {"UserId":"...","Account":"123456","Arn":"arn:aws:..."}
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&stdout) {
+                    let account = parsed
+                        .get("Account")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let arn = parsed
+                        .get("Arn")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    StsCheckResult::Valid { account, arn }
+                } else {
+                    StsCheckResult::Valid {
+                        account: "ok".to_string(),
+                        arn: stdout.trim().to_string(),
                     }
-                    None => {
-                        best_valid = Some((expires_at, expires_str.to_string()));
-                    }
-                    _ => {}
+                }
+            } else {
+                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                // Check if it's a token expiry error
+                let stderr_lower = stderr.to_lowercase();
+                if stderr_lower.contains("expired")
+                    || stderr_lower.contains("not authorized")
+                    || stderr_lower.contains("invalid")
+                    || stderr_lower.contains("the sso session")
+                    || stderr_lower.contains("token has expired")
+                    || stderr_lower.contains("refresh failed")
+                {
+                    StsCheckResult::Expired { error: stderr }
+                } else {
+                    StsCheckResult::Error { error: stderr }
                 }
             }
         }
+        Err(e) => StsCheckResult::Error {
+            error: format!("Failed to run aws cli: {}", e),
+        },
     }
-
-    if let Some((expires_at, expires_at_str)) = best_valid {
-        SsoTokenState::Valid {
-            expires_in: std::time::Duration::from_secs(expires_at - now),
-            expires_at_str,
-        }
-    } else if found_any {
-        // Found matching files but all expired
-        SsoTokenState::Expired
-    } else {
-        SsoTokenState::NotFound
-    }
-}
-
-/// Format seconds into human-readable: "2h 15m", "45m 30s", "30s"
-fn format_duration(secs: u64) -> String {
-    let hours = secs / 3600;
-    let mins = (secs % 3600) / 60;
-    let s = secs % 60;
-    if hours > 0 {
-        format!("{}h {:02}m", hours, mins)
-    } else if mins > 0 {
-        format!("{}m {:02}s", mins, s)
-    } else {
-        format!("{}s", s)
-    }
-}
-
-/// Simple ISO 8601 parser — returns Unix timestamp
-fn parse_iso8601(s: &str) -> Option<u64> {
-    let s = s.trim().replace("UTC", "Z").replace("utc", "Z");
-    let s = s.trim_end_matches('Z');
-
-    let parts: Vec<&str> = s.split('T').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-
-    let date_parts: Vec<u64> = parts[0].split('-').filter_map(|p| p.parse().ok()).collect();
-    let time_str = parts[1].split('+').next().unwrap_or(parts[1]);
-    let time_parts: Vec<u64> = time_str.split(':').filter_map(|p| p.parse().ok()).collect();
-
-    if date_parts.len() != 3 || time_parts.len() < 2 {
-        return None;
-    }
-
-    let (year, month, day) = (date_parts[0], date_parts[1], date_parts[2]);
-    let (hour, minute) = (time_parts[0], time_parts[1]);
-    let second = time_parts.get(2).copied().unwrap_or(0);
-
-    let mut days: u64 = 0;
-    for y in 1970..year {
-        days += if is_leap(y) { 366 } else { 365 };
-    }
-    let month_days = [
-        31,
-        28 + if is_leap(year) { 1 } else { 0 },
-        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
-    ];
-    for m in 0..(month as usize - 1).min(11) {
-        days += month_days[m];
-    }
-    days += day - 1;
-
-    Some(days * 86400 + hour * 3600 + minute * 60 + second)
-}
-
-fn is_leap(y: u64) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }

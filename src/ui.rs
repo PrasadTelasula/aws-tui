@@ -287,14 +287,12 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
             }
         }
 
-        // SSO: show token remaining time
+        // SSO: show connected status
         if matches!(status, SessionStatus::Connected) {
-            if let Some(remaining) = app.token_remaining_str(&alias.name) {
-                spans.push(Span::styled(
-                    format!("  {} left", remaining),
-                    Style::default().fg(TEAL),
-                ));
-            }
+            spans.push(Span::styled(
+                "  connected",
+                Style::default().fg(TEAL),
+            ));
         }
         if matches!(status, SessionStatus::Expired) {
             spans.push(Span::styled("  expired", Style::default().fg(AMBER)));
@@ -452,29 +450,22 @@ fn draw_right(f: &mut Frame, area: Rect, app: &App) {
         lines.push(kv(ICON_COG, "PID", v));
     }
 
-    // SSO token expiry details
-    if let Some((expires_at, remaining_secs)) = app.token_expiry.get(&a.name) {
-        let remaining_str = {
-            let h = remaining_secs / 3600;
-            let m = (remaining_secs % 3600) / 60;
-            let s = remaining_secs % 60;
-            if h > 0 { format!("{}h {:02}m", h, m) }
-            else if m > 0 { format!("{}m {:02}s", m, s) }
-            else { format!("{}s", s) }
-        };
-
-        let color = if *remaining_secs < 300 { AMBER } else { TEAL };
-
-        lines.push(kv(ICON_CLOCK, "Expires", vec![
-            Span::styled(expires_at.as_str(), Style::default().fg(FG2)),
+    // SSO session info from STS check
+    if let Some((info, _)) = app.token_expiry.get(&a.name) {
+        lines.push(kv(ICON_GLOBE, "Identity", vec![
+            Span::styled(info.as_str(), Style::default().fg(TEAL)),
         ]));
-        lines.push(kv(ICON_CLOCK, "Remaining", vec![
-            Span::styled(remaining_str, Style::default().fg(color).add_modifier(Modifier::BOLD)),
-            if *remaining_secs < 300 {
-                Span::styled("  ⚠ expiring soon", Style::default().fg(AMBER))
-            } else {
-                Span::raw("")
-            },
+    }
+
+    // Show "verified" for connected, "expired" for expired
+    if matches!(st, SessionStatus::Connected) {
+        lines.push(kv(ICON_CLOCK, "Status", vec![
+            Span::styled("verified", Style::default().fg(GREEN)),
+            Span::styled("  (checked every 60s)", Style::default().fg(FG3)),
+        ]));
+    } else if matches!(st, SessionStatus::Expired) {
+        lines.push(kv(ICON_CLOCK, "Status", vec![
+            Span::styled("expired — re-login required", Style::default().fg(AMBER)),
         ]));
     }
 

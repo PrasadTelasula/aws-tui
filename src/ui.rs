@@ -53,9 +53,9 @@ const ICON_TERM: &str = "\u{f120}";      //  terminal (command)
 const ICON_GLOBE: &str = "\u{f0ac}";     //  globe (network/port)
 const ICON_HASH: &str = "\u{f292}";      //  hashtag (target)
 const ICON_DATABASE: &str = "\u{f1c0}";  //  database (DB subgroup)
-const ICON_SHIELD: &str = "\u{f3ed}";    //  shield (SSO subgroup)
+const ICON_SHIELD: &str = "\u{f132}";    //  shield (SSO subgroup)
 const ICON_DESKTOP: &str = "\u{f108}";   //  desktop (OS subgroup)
-const ICON_NETWORK: &str = "\u{f6ff}";   //  network (VPN/tunnel subgroup)
+const ICON_NETWORK: &str = "\u{f0e8}";   //  sitemap (VPN/tunnel subgroup)
 const ICON_TAG: &str = "\u{f02b}";       //  tag (generic subgroup)
 
 // ════════════════════════════════════════════════════════════════════

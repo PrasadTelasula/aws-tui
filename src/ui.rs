@@ -832,10 +832,10 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
                 row_num += 1;
             }
 
-            let (icon, kind_tag) = match &alias.kind {
-                AliasKind::SsoLogin { .. }  => (ICON_KEY, "sso"),
-                AliasKind::SsmSession { .. } => (ICON_PLUG, "ssm"),
-                AliasKind::Other             => (ICON_TERM, "other"),
+            let (icon, kind_tag, kind_color) = match &alias.kind {
+                AliasKind::SsoLogin { .. }  => (ICON_KEY, "sso", BLUE),
+                AliasKind::SsmSession { .. } => (ICON_PLUG, "ssm", TEAL),
+                AliasKind::Other             => (ICON_TERM, "other", AMBER),
             };
 
             items.push(ListItem::new(Line::from(vec![
@@ -844,7 +844,7 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
                     alias.group.clone(),
                     Style::default().fg(FG).add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(format!("  {}", kind_tag), Style::default().fg(FG4)),
+                Span::styled(format!("  {}", kind_tag), Style::default().fg(kind_color)),
             ])));
             row_num += 1;
         }

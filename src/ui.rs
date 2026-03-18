@@ -960,12 +960,16 @@ fn draw_right(f: &mut Frame, area: Rect, app: &App) {
     let a = &app.aliases[app.selected_index];
     let st = &app.session_statuses[app.selected_index];
 
+    let has_creds = matches!(st, SessionStatus::Connected)
+        && app.session_credentials.contains_key(&a.name);
+    let details_height = if has_creds { 12 } else { 8 };
+
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Length(1),
-            Constraint::Length(8),
+            Constraint::Length(details_height),
             Constraint::Length(1),
             Constraint::Min(2),
         ])
@@ -1073,6 +1077,36 @@ fn draw_right(f: &mut Frame, area: Rect, app: &App) {
     if let Some((info, _)) = app.token_expiry.get(&a.name) {
         lines.push(kv(ICON_GLOBE, "Identity", vec![
             Span::styled(info.as_str(), Style::default().fg(TEAL)),
+        ]));
+    }
+
+    // Resolved temporary credentials (SSO connected sessions)
+    if let Some(c) = app.session_credentials.get(&a.name) {
+        lines.push(kv(ICON_KEY, "AccessKeyId", vec![
+            Span::styled(&c.access_key_id, Style::default().fg(BLUE)),
+        ]));
+        let secret_display = if c.secret_access_key.len() > 8 {
+            format!("{}••••••••", &c.secret_access_key[..4])
+        } else {
+            "••••••••".to_string()
+        };
+        lines.push(kv(ICON_KEY, "SecretKey", vec![
+            Span::styled(secret_display, Style::default().fg(FG2)),
+        ]));
+        let token_display = if c.session_token.len() > 28 {
+            format!("{}…", &c.session_token[..28])
+        } else {
+            c.session_token.clone()
+        };
+        lines.push(kv(ICON_KEY, "Token", vec![
+            Span::styled(token_display, Style::default().fg(FG3)),
+        ]));
+        let exp_color = if c.remaining_secs < 300 { RED }
+                        else if c.remaining_secs < 1800 { AMBER }
+                        else { GREEN };
+        lines.push(kv(ICON_CLOCK, "Expires", vec![
+            Span::styled(crate::session::format_expiry(c.remaining_secs), Style::default().fg(exp_color)),
+            Span::styled(format!("  {}", c.expiration), Style::default().fg(FG3)),
         ]));
     }
 

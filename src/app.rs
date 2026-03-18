@@ -1,6 +1,6 @@
 use crate::instances::InstancesState;
 use crate::parser::{Alias, AliasKind};
-use crate::session::{SessionKind, SessionManager, SessionStatus};
+use crate::session::{CredentialInfo, SessionKind, SessionManager, SessionStatus};
 use crate::terminal::TerminalState;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -64,6 +64,8 @@ pub struct App {
     pub session_start_times: HashMap<String, Instant>,
     /// SSO token expiry: (expires_at_str, remaining_secs)
     pub token_expiry: HashMap<String, (String, u64)>,
+    /// Full resolved credentials for connected SSO sessions
+    pub session_credentials: HashMap<String, CredentialInfo>,
     pub session_manager: SessionManager,
     pub output_tx: mpsc::UnboundedSender<(String, String)>,
     pub output_rx: mpsc::UnboundedReceiver<(String, String)>,
@@ -116,6 +118,7 @@ impl App {
             session_pids: HashMap::new(),
             session_start_times: HashMap::new(),
             token_expiry: HashMap::new(),
+            session_credentials: HashMap::new(),
             session_manager: SessionManager::new(),
             output_tx: tx,
             output_rx: rx,
@@ -428,6 +431,13 @@ impl App {
                 self.token_expiry.insert(alias.name.clone(), (s, r));
             } else {
                 self.token_expiry.remove(&alias.name);
+            }
+
+            // Fetch full credentials for display in the detail panel
+            if let Some(creds) = self.session_manager.get_credentials(&alias.name).await {
+                self.session_credentials.insert(alias.name.clone(), creds);
+            } else {
+                self.session_credentials.remove(&alias.name);
             }
 
             let output = self.session_manager.get_output(&alias.name).await;

@@ -36,6 +36,17 @@ pub enum SessionKind {
     Other,
 }
 
+/// Resolved temporary credentials from `aws configure export-credentials`.
+#[derive(Debug, Clone)]
+pub struct CredentialInfo {
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: String,
+    /// Raw ISO 8601 expiration timestamp from the CLI output.
+    pub expiration: String,
+    pub remaining_secs: u64,
+}
+
 #[derive(Debug)]
 pub struct Session {
     pub status: SessionStatus,
@@ -46,6 +57,7 @@ pub struct Session {
     pub sso_profile: Option<String>,
     pub token_expires_at: Option<String>,
     pub token_remaining_secs: Option<u64>,
+    pub credentials: Option<CredentialInfo>,
     child: Option<Child>,
 }
 
@@ -59,6 +71,7 @@ impl Session {
             sso_profile: None,
             token_expires_at: None,
             token_remaining_secs: None,
+            credentials: None,
             child: None,
         }
     }
@@ -307,6 +320,15 @@ impl SessionManager {
         }
     }
 
+    pub async fn get_credentials(&self, alias_name: &str) -> Option<CredentialInfo> {
+        if let Some(session) = self.sessions.get(alias_name) {
+            let s = session.lock().await;
+            s.credentials.clone()
+        } else {
+            None
+        }
+    }
+
     pub async fn get_token_expiry(&self, alias_name: &str) -> (Option<String>, Option<u64>) {
         if let Some(session) = self.sessions.get(alias_name) {
             let s = session.lock().await;
@@ -371,11 +393,12 @@ impl SessionManager {
                         ));
                     }
 
-                    // Seed expiry immediately on startup
-                    if let Some((exp_str, remaining)) = read_credentials_expiry(&profile).await {
+                    // Seed credentials immediately on startup
+                    if let Some(c) = fetch_credentials(&profile).await {
                         let mut s = session.lock().await;
-                        s.token_expires_at = Some(exp_str);
-                        s.token_remaining_secs = Some(remaining);
+                        s.token_expires_at = Some(format_expiry(c.remaining_secs));
+                        s.token_remaining_secs = Some(c.remaining_secs);
+                        s.credentials = Some(c);
                     }
 
                     // Start liveness watcher
@@ -460,8 +483,8 @@ async fn sso_liveness_watcher(
         }
 
         let check_result = check_sts_identity(&profile).await;
-        // Read expiry via export-credentials AFTER STS (may trigger token refresh)
-        let expiry = read_credentials_expiry(&profile).await;
+        // Fetch full credentials AFTER STS (may trigger token refresh)
+        let creds = fetch_credentials(&profile).await;
 
         {
             let mut s = session.lock().await;
@@ -472,16 +495,16 @@ async fn sso_liveness_watcher(
 
             match check_result {
                 StsCheckResult::Valid { account, arn } => {
-                    match expiry {
-                        Some((ref exp_str, remaining)) if remaining > 0 => {
-                            s.token_expires_at = Some(exp_str.clone());
-                            s.token_remaining_secs = Some(remaining);
-                        }
-                        _ => {
-                            // export-credentials unavailable or returned expired;
-                            // STS succeeded so session is live — show account instead.
+                    if let Some(ref c) = creds {
+                        s.credentials = Some(c.clone());
+                        if c.remaining_secs > 0 {
+                            s.token_expires_at = Some(format_expiry(c.remaining_secs));
+                            s.token_remaining_secs = Some(c.remaining_secs);
+                        } else {
                             s.token_expires_at = Some(format!("account: {}", account));
                         }
+                    } else {
+                        s.token_expires_at = Some(format!("account: {}", account));
                     }
                     s.output_lines.push(format!(
                         ">>> Session verified — {} ({})",
@@ -508,12 +531,12 @@ async fn sso_liveness_watcher(
     }
 }
 
-// ─── Credential Expiry via AWS CLI ──────────────────────────────────
+// ─── Credential Fetcher via AWS CLI ─────────────────────────────────
 // Runs `aws configure export-credentials --profile <profile>` and
-// extracts the Expiration field. This is profile-scoped and works
-// correctly when multiple SSO sessions are active simultaneously.
+// captures all credential fields. Profile-scoped — safe for multiple
+// concurrent SSO sessions.
 
-async fn read_credentials_expiry(profile: &str) -> Option<(String, u64)> {
+async fn fetch_credentials(profile: &str) -> Option<CredentialInfo> {
     let output = Command::new("aws")
         .args(["configure", "export-credentials", "--profile", profile])
         .stdout(Stdio::piped())
@@ -529,16 +552,22 @@ async fn read_credentials_expiry(profile: &str) -> Option<(String, u64)> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value = serde_json::from_str(&stdout).ok()?;
-    let expiration = json.get("Expiration").and_then(|v| v.as_str())?;
+
+    let access_key_id    = json.get("AccessKeyId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let secret_access_key = json.get("SecretAccessKey").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let session_token    = json.get("SessionToken").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let expiration       = json.get("Expiration").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_secs();
 
-    let expiry_unix = parse_iso8601_to_unix(expiration)?;
-    let remaining = expiry_unix.saturating_sub(now);
-    Some((format_expiry(remaining), remaining))
+    let remaining = parse_iso8601_to_unix(&expiration)
+        .map(|t| t.saturating_sub(now))
+        .unwrap_or(0);
+
+    Some(CredentialInfo { access_key_id, secret_access_key, session_token, expiration, remaining_secs: remaining })
 }
 
 /// Parse an ISO 8601 UTC timestamp to a Unix timestamp (seconds).

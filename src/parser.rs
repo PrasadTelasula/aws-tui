@@ -22,6 +22,7 @@ pub struct Alias {
     pub command: String,
     pub kind: AliasKind,
     pub group: String,
+    pub subgroup: Option<String>,
 }
 
 impl Alias {}
@@ -70,9 +71,10 @@ pub fn parse_alias_file(path: &Path) -> Vec<Alias> {
 
 pub fn parse_aliases(content: &str) -> Vec<Alias> {
     let alias_re = Regex::new(r#"^\s*alias\s+([a-zA-Z0-9_-]+)\s*=\s*'(.+?)'\s*$"#).unwrap();
-    let group_re = Regex::new(r"(?i)#\s*group:\s*(.+)").unwrap();
+    let group_re = Regex::new(r"(?i)#\s*group:\s*([^,]+?)(?:\s+type\s*:\s*(.+))?$").unwrap();
     let mut aliases = Vec::new();
     let mut current_group = "Other".to_string();
+    let mut current_subgroup: Option<String> = None;
 
     for line in content.lines() {
         let line = line.trim();
@@ -82,10 +84,8 @@ pub fn parse_aliases(content: &str) -> Vec<Alias> {
         }
 
         if let Some(caps) = group_re.captures(line) {
-            let raw = caps[1].trim();
-            // Strip any trailing metadata like "Type: SSO" — kind is auto-detected
-            let type_re = Regex::new(r"(?i)\s+type\s*:.*$").unwrap();
-            current_group = type_re.replace(raw, "").trim().to_string();
+            current_group = caps[1].trim().to_string();
+            current_subgroup = caps.get(2).map(|m| m.as_str().trim().to_string());
             continue;
         }
 
@@ -103,6 +103,7 @@ pub fn parse_aliases(content: &str) -> Vec<Alias> {
                 command,
                 kind,
                 group: current_group.clone(),
+                subgroup: current_subgroup.clone(),
             });
         }
     }

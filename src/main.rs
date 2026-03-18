@@ -80,16 +80,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut sorted_aliases = aliases;
     sorted_aliases.sort_by(|a, b| {
-        let kind_order = |k: &parser::AliasKind| -> u8 {
-            match k {
-                parser::AliasKind::SsoLogin { .. } => 0,
-                parser::AliasKind::SsmSession { .. } => 1,
-                parser::AliasKind::Other => 2,
-            }
-        };
         a.group
             .cmp(&b.group)
-            .then(kind_order(&a.kind).cmp(&kind_order(&b.kind)))
+            .then(a.subgroup.as_deref().unwrap_or("").cmp(b.subgroup.as_deref().unwrap_or("")))
             .then(a.name.cmp(&b.name))
     });
 

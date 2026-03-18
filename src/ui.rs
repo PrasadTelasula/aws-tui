@@ -48,9 +48,15 @@ const ICON_COG: &str = "\u{f013}";       //  cog (PID/process)
 const ICON_CLOCK: &str = "\u{f017}";     //  clock (uptime)
 const ICON_SEARCH: &str = "\u{f002}";    //  search
 const ICON_FOLDER: &str = "\u{f07b}";    //  folder (group)
+const ICON_FOLDER_OPEN: &str = "\u{f07c}"; //  folder open (expanded group)
 const ICON_TERM: &str = "\u{f120}";      //  terminal (command)
 const ICON_GLOBE: &str = "\u{f0ac}";     //  globe (network/port)
 const ICON_HASH: &str = "\u{f292}";      //  hashtag (target)
+const ICON_DATABASE: &str = "\u{f1c0}";  //  database (DB subgroup)
+const ICON_SHIELD: &str = "\u{f3ed}";    //  shield (SSO subgroup)
+const ICON_DESKTOP: &str = "\u{f108}";   //  desktop (OS subgroup)
+const ICON_NETWORK: &str = "\u{f6ff}";   //  network (VPN/tunnel subgroup)
+const ICON_TAG: &str = "\u{f02b}";       //  tag (generic subgroup)
 
 // ════════════════════════════════════════════════════════════════════
 
@@ -819,6 +825,7 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
 
     let mut items: Vec<ListItem> = Vec::new();
     let mut prev_gk = String::new();
+    let mut prev_group = String::new();
     let mut row_num: usize = 0;
 
     for &idx in &indices {
@@ -826,31 +833,55 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
         let gk = group_key(alias);
 
         if gk != prev_gk {
-            prev_gk = gk.clone();
-            if !items.is_empty() {
-                items.push(ListItem::new(Line::from("")));
+            // ── Parent group header (only when group name itself changes) ──
+            if alias.group != prev_group {
+                if !items.is_empty() {
+                    items.push(ListItem::new(Line::from("")));
+                    row_num += 1;
+                }
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled(format!("  {} ", ICON_FOLDER_OPEN), Style::default().fg(MAUVE)),
+                    Span::styled(
+                        alias.group.clone(),
+                        Style::default().fg(FG).add_modifier(Modifier::BOLD),
+                    ),
+                ])));
                 row_num += 1;
+                prev_group = alias.group.clone();
             }
 
-            let (icon, kind_tag, kind_color) = match &alias.kind {
-                AliasKind::SsoLogin { .. }  => (ICON_KEY, "sso", BLUE),
-                AliasKind::SsmSession { .. } => (ICON_PLUG, "ssm", TEAL),
-                AliasKind::Other             => (ICON_TERM, "other", AMBER),
+            // ── Subgroup header ──────────────────────────────────────────
+            let (sg_icon, sg_color) = match &alias.subgroup {
+                Some(sg) => subgroup_icon(sg),
+                None => {
+                    match &alias.kind {
+                        AliasKind::SsoLogin { .. }  => (ICON_SHIELD, BLUE),
+                        AliasKind::SsmSession { .. } => (ICON_PLUG, TEAL),
+                        AliasKind::Other             => (ICON_TAG, FG2),
+                    }
+                }
             };
+            let sg_label = alias.subgroup.clone().unwrap_or_else(|| {
+                match &alias.kind {
+                    AliasKind::SsoLogin { .. }  => "SSO".to_string(),
+                    AliasKind::SsmSession { .. } => "SSM".to_string(),
+                    AliasKind::Other             => "Other".to_string(),
+                }
+            });
 
             items.push(ListItem::new(Line::from(vec![
-                Span::styled(format!("  {} ", icon), Style::default().fg(MAUVE)),
+                Span::styled(format!("    {} ", sg_icon), Style::default().fg(sg_color)),
                 Span::styled(
-                    alias.group.clone(),
-                    Style::default().fg(FG).add_modifier(Modifier::BOLD),
+                    sg_label,
+                    Style::default().fg(sg_color).add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(format!("  {}", kind_tag), Style::default().fg(kind_color)),
             ])));
             row_num += 1;
+            prev_gk = gk.clone();
         }
 
         let is_last = group_last.get(&gk).copied() == Some(idx);
-        let tree = if is_last { "  └ " } else { "  ├ " };
+        let tree = if is_last { "      └ " } else { "      ├ " };
 
         let status = &app.session_statuses[idx];
         let selected = app.selected_index == idx;
@@ -936,12 +967,17 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn group_key(a: &crate::parser::Alias) -> String {
-    let k = match &a.kind {
-        AliasKind::SsoLogin { .. } => "sso",
-        AliasKind::SsmSession { .. } => "ssm",
-        AliasKind::Other => "other",
-    };
-    format!("{}:{}", a.group, k)
+    format!("{}:{}", a.group, a.subgroup.as_deref().unwrap_or(""))
+}
+
+fn subgroup_icon(subgroup: &str) -> (&'static str, Color) {
+    match subgroup.to_lowercase().as_str() {
+        s if s.contains("sso") || s.contains("login") || s.contains("auth") => (ICON_SHIELD, BLUE),
+        s if s.contains("db") || s.contains("database") || s.contains("rds") => (ICON_DATABASE, AMBER),
+        s if s.contains("os") || s.contains("shell") || s.contains("host") => (ICON_DESKTOP, TEAL),
+        s if s.contains("vpn") || s.contains("tunnel") || s.contains("net") => (ICON_NETWORK, MAUVE),
+        _ => (ICON_TAG, FG2),
+    }
 }
 
 // ─── RIGHT: DETAIL + OUTPUT ─────────────────────────────────────────

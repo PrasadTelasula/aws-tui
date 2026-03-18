@@ -1338,11 +1338,14 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn key_span(k: &str) -> Span<'_> {
-    Span::styled(k, Style::default().fg(FG2))
+    Span::styled(
+        format!("[{}]", k),
+        Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
+    )
 }
 
 fn desc_span(d: &str) -> Span<'_> {
-    Span::styled(d, Style::default().fg(FG4))
+    Span::styled(d, Style::default().fg(FG2))
 }
 
 // ─── SEARCH ─────────────────────────────────────────────────────────

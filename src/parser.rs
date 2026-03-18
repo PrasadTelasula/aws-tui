@@ -82,7 +82,10 @@ pub fn parse_aliases(content: &str) -> Vec<Alias> {
         }
 
         if let Some(caps) = group_re.captures(line) {
-            current_group = caps[1].trim().to_string();
+            let raw = caps[1].trim();
+            // Strip any trailing metadata like "Type: SSO" — kind is auto-detected
+            let type_re = Regex::new(r"(?i)\s+type\s*:.*$").unwrap();
+            current_group = type_re.replace(raw, "").trim().to_string();
             continue;
         }
 

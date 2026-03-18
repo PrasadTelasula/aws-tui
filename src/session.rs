@@ -171,11 +171,7 @@ impl SessionManager {
                                         ">>> SSO login succeeded (session: {})",
                                         session_name
                                     ));
-                                    // Seed expiry immediately from cache
-                                    if let Some((exp_str, remaining)) = read_sso_token_expiry(session_name) {
-                                        s.token_expires_at = Some(exp_str);
-                                        s.token_remaining_secs = Some(remaining);
-                                    }
+                                    // Expiry will be seeded by the liveness watcher on first tick
 
                                     // Resolve profile from ~/.aws/config
                                     let profile = resolve_profile_for_sso_session(session_name);
@@ -223,8 +219,7 @@ impl SessionManager {
             }
 
             // For SSO sessions with a resolved profile, start liveness watcher
-            if let SessionKind::SsoLogin { session_name: ref sso_name } = kind_clone {
-                let sso_name = sso_name.clone();
+            if let SessionKind::SsoLogin { .. } = kind_clone {
                 let profile = {
                     let s = session_clone.lock().await;
                     s.sso_profile.clone()
@@ -232,7 +227,7 @@ impl SessionManager {
                 if let Some(profile) = profile {
                     let sess = session_clone.clone();
                     tokio::spawn(async move {
-                        sso_liveness_watcher(sess, profile, sso_name).await;
+                        sso_liveness_watcher(sess, profile).await;
                     });
                 }
             }
@@ -376,8 +371,8 @@ impl SessionManager {
                         ));
                     }
 
-                    // Seed expiry from cache immediately on startup
-                    if let Some((exp_str, remaining)) = read_sso_token_expiry(sso_session_name) {
+                    // Seed expiry immediately on startup
+                    if let Some((exp_str, remaining)) = read_credentials_expiry(&profile).await {
                         let mut s = session.lock().await;
                         s.token_expires_at = Some(exp_str);
                         s.token_remaining_secs = Some(remaining);
@@ -386,9 +381,8 @@ impl SessionManager {
                     // Start liveness watcher
                     let sess_clone = session.clone();
                     let prof_clone = profile.clone();
-                    let sso_name = sso_session_name.clone();
                     tokio::spawn(async move {
-                        sso_liveness_watcher(sess_clone, prof_clone, sso_name).await;
+                        sso_liveness_watcher(sess_clone, prof_clone).await;
                     });
 
                     self.sessions.insert(alias_name.clone(), session);
@@ -445,13 +439,12 @@ fn resolve_profile_for_sso_session(session_name: &str) -> Option<String> {
 
 // ─── SSO Liveness Watcher ───────────────────────────────────────────
 // Periodically runs `aws sts get-caller-identity --profile <profile>`
-// to verify the SSO session is still valid. Also reads the SSO token
-// cache to surface the real expiry time.
+// to verify the SSO session is still valid, then reads the credential
+// expiry via `aws configure export-credentials --profile <profile>`.
 
 async fn sso_liveness_watcher(
     session: Arc<Mutex<Session>>,
     profile: String,
-    sso_session_name: String,
 ) {
     // Initial check after 5 seconds (give CLI time to cache credentials)
     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
@@ -466,19 +459,13 @@ async fn sso_liveness_watcher(
             break;
         }
 
-        // Run sts get-caller-identity first — this may trigger AWS CLI to refresh
-        // an expired access token and write a fresh cache file.
         let check_result = check_sts_identity(&profile).await;
-
-        // Read token expiry AFTER STS so we see the freshly-written cache file.
-        // scan_sso_token_expiry returns the file with the latest expiresAt among
-        // all matching files, avoiding stale expired entries from previous logins.
-        let expiry = read_sso_token_expiry(&sso_session_name);
+        // Read expiry via export-credentials AFTER STS (may trigger token refresh)
+        let expiry = read_credentials_expiry(&profile).await;
 
         {
             let mut s = session.lock().await;
 
-            // Re-check status in case it changed while we were awaiting
             if s.status != SessionStatus::Connected {
                 break;
             }
@@ -486,14 +473,13 @@ async fn sso_liveness_watcher(
             match check_result {
                 StsCheckResult::Valid { account, arn } => {
                     match expiry {
-                        // Cache has a valid (non-expired) token — show real expiry
                         Some((ref exp_str, remaining)) if remaining > 0 => {
                             s.token_expires_at = Some(exp_str.clone());
                             s.token_remaining_secs = Some(remaining);
                         }
-                        // Cache expired but STS succeeded: token was just refreshed;
-                        // cache file may not be flushed yet — keep previous expiry.
                         _ => {
+                            // export-credentials unavailable or returned expired;
+                            // STS succeeded so session is live — show account instead.
                             s.token_expires_at = Some(format!("account: {}", account));
                         }
                     }
@@ -505,17 +491,11 @@ async fn sso_liveness_watcher(
                 StsCheckResult::Expired { error } => {
                     s.status = SessionStatus::Expired;
                     s.token_remaining_secs = Some(0);
-                    s.output_lines.push(format!(
-                        ">>> SSO session expired — {}",
-                        error
-                    ));
-                    s.output_lines.push(
-                        ">>> Re-login required (press Enter)".to_string(),
-                    );
+                    s.output_lines.push(format!(">>> SSO session expired — {}", error));
+                    s.output_lines.push(">>> Re-login required (press Enter)".to_string());
                     break;
                 }
                 StsCheckResult::Error { error } => {
-                    // Transient error — don't mark expired, just log
                     s.output_lines.push(format!(
                         ">>> STS check failed: {} (will retry)",
                         error
@@ -524,124 +504,41 @@ async fn sso_liveness_watcher(
             }
         }
 
-        // Check every 60 seconds
         tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
     }
 }
 
-// ─── SSO Cache Reader ───────────────────────────────────────────────
-// Reads ~/.aws/sso/cache/*.json to find the token for the given
-// sso-session and returns (display_string, remaining_secs).
+// ─── Credential Expiry via AWS CLI ──────────────────────────────────
+// Runs `aws configure export-credentials --profile <profile>` and
+// extracts the Expiration field. This is profile-scoped and works
+// correctly when multiple SSO sessions are active simultaneously.
 
-fn read_sso_token_expiry(sso_session_name: &str) -> Option<(String, u64)> {
-    let cache_dir = dirs::home_dir()?.join(".aws/sso/cache");
-    let entries = fs::read_dir(&cache_dir).ok()?;
+async fn read_credentials_expiry(profile: &str) -> Option<(String, u64)> {
+    let output = Command::new("aws")
+        .args(["configure", "export-credentials", "--profile", profile])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .ok()?;
 
-    // Also look up the start_url from ~/.aws/config for fallback matching
-    let start_url = read_sso_start_url(sso_session_name);
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).ok()?;
+    let expiration = json.get("Expiration").and_then(|v| v.as_str())?;
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_secs();
 
-    // Two-pass scan: prefer sessionName-matched files (exact, session-scoped);
-    // fall back to startUrl only if no sessionName match exists at all.
-    // This prevents cross-session contamination when multiple SSO sessions share
-    // the same portal URL but have different session names.
-    let mut best_name: Option<(u64, u64)> = None; // from sessionName match
-    let mut best_url: Option<(u64, u64)> = None;  // from startUrl fallback
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
-            continue;
-        }
-        let content = match fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let json: serde_json::Value = match serde_json::from_str(&content) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        // Token files have "accessToken"; skip role-credential files
-        if json.get("accessToken").is_none() {
-            continue;
-        }
-
-        let expires_at = match json.get("expiresAt").and_then(|v| v.as_str()) {
-            Some(s) => s,
-            None => continue,
-        };
-        let expiry_unix = match parse_iso8601_to_unix(expires_at) {
-            Some(t) => t,
-            None => continue,
-        };
-        let remaining = expiry_unix.saturating_sub(now);
-
-        // Match by sessionName (AWS CLI v2) — exact, session-scoped
-        let name_match = json
-            .get("sessionName")
-            .and_then(|v| v.as_str())
-            .map(|s| s == sso_session_name)
-            .unwrap_or(false);
-
-        if name_match {
-            if best_name.map_or(true, |(b, _)| expiry_unix > b) {
-                best_name = Some((expiry_unix, remaining));
-            }
-            continue; // don't double-count as url_match
-        }
-
-        // Fallback: match by startUrl (older AWS CLI v1 format, no sessionName)
-        let url_match = start_url
-            .as_deref()
-            .zip(json.get("startUrl").and_then(|v| v.as_str()))
-            .map(|(cfg_url, tok_url)| {
-                cfg_url.trim_end_matches('/') == tok_url.trim_end_matches('/')
-            })
-            .unwrap_or(false);
-
-        if url_match {
-            if best_url.map_or(true, |(b, _)| expiry_unix > b) {
-                best_url = Some((expiry_unix, remaining));
-            }
-        }
-    }
-
-    // sessionName match takes priority over startUrl fallback
-    let best = best_name.or(best_url);
-    best.map(|(_, remaining)| (format_expiry(remaining), remaining))
-}
-
-/// Read sso_start_url from the [sso-session <name>] section of ~/.aws/config.
-fn read_sso_start_url(sso_session_name: &str) -> Option<String> {
-    let config_path = dirs::home_dir()?.join(".aws/config");
-    let content = fs::read_to_string(config_path).ok()?;
-
-    let target = format!("[sso-session {}]", sso_session_name);
-    let mut in_section = false;
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed == target {
-            in_section = true;
-            continue;
-        }
-        if in_section {
-            if trimmed.starts_with('[') {
-                break;
-            }
-            if let Some((key, val)) = trimmed.split_once('=') {
-                if key.trim() == "sso_start_url" {
-                    return Some(val.trim().to_string());
-                }
-            }
-        }
-    }
-    None
+    let expiry_unix = parse_iso8601_to_unix(expiration)?;
+    let remaining = expiry_unix.saturating_sub(now);
+    Some((format_expiry(remaining), remaining))
 }
 
 /// Parse an ISO 8601 UTC timestamp to a Unix timestamp (seconds).

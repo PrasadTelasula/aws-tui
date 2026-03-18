@@ -1,4 +1,3 @@
-use chrono::{DateTime, Local};
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
@@ -43,9 +42,8 @@ pub struct CredentialInfo {
     pub access_key_id: String,
     pub secret_access_key: String,
     pub session_token: String,
-    /// Raw ISO 8601 expiration timestamp from the CLI output.
+    /// Raw expiration string exactly as returned by the AWS CLI.
     pub expiration: String,
-    pub remaining_secs: u64,
 }
 
 #[derive(Debug)]
@@ -397,8 +395,6 @@ impl SessionManager {
                     // Seed credentials immediately on startup
                     if let Some(c) = fetch_credentials(&profile).await {
                         let mut s = session.lock().await;
-                        s.token_expires_at = Some(format_expiry(c.remaining_secs));
-                        s.token_remaining_secs = Some(c.remaining_secs);
                         s.credentials = Some(c);
                     }
 
@@ -498,15 +494,8 @@ async fn sso_liveness_watcher(
                 StsCheckResult::Valid { account, arn } => {
                     if let Some(ref c) = creds {
                         s.credentials = Some(c.clone());
-                        if c.remaining_secs > 0 {
-                            s.token_expires_at = Some(format_expiry(c.remaining_secs));
-                            s.token_remaining_secs = Some(c.remaining_secs);
-                        } else {
-                            s.token_expires_at = Some(format!("account: {}", account));
-                        }
-                    } else {
-                        s.token_expires_at = Some(format!("account: {}", account));
                     }
+                    s.token_expires_at = Some(format!("{} ({})", arn, account));
                     s.output_lines.push(format!(
                         ">>> Session verified — {} ({})",
                         arn, account
@@ -554,36 +543,15 @@ async fn fetch_credentials(profile: &str) -> Option<CredentialInfo> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value = serde_json::from_str(&stdout).ok()?;
 
-    let access_key_id    = json.get("AccessKeyId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let access_key_id     = json.get("AccessKeyId").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let secret_access_key = json.get("SecretAccessKey").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let session_token    = json.get("SessionToken").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let expiration_raw = json.get("Expiration").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let session_token     = json.get("SessionToken").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    // Store the raw expiration string exactly as the CLI returned it — no calculation.
+    let expiration        = json.get("Expiration").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
-    // Parse as RFC 3339 (handles any UTC offset, e.g. +00:00, -07:00, Z)
-    let expiry_dt = DateTime::parse_from_rfc3339(&expiration_raw).ok()?;
-    let now = Local::now();
-    let remaining = expiry_dt.signed_duration_since(now).num_seconds().max(0) as u64;
-    // Display in the user's local time so it matches their wall clock
-    let expiration_local = expiry_dt
-        .with_timezone(&Local)
-        .format("%b %d %H:%M:%S")
-        .to_string();
-
-    Some(CredentialInfo { access_key_id, secret_access_key, session_token, expiration: expiration_local, remaining_secs: remaining })
+    Some(CredentialInfo { access_key_id, secret_access_key, session_token, expiration })
 }
 
-/// Format remaining seconds as a human-readable string: "3d 2h", "1h 14m", "45m"
-pub fn format_expiry(remaining_secs: u64) -> String {
-    if remaining_secs == 0 {
-        return "expired".to_string();
-    }
-    let days  = remaining_secs / 86400;
-    let hours = (remaining_secs % 86400) / 3600;
-    let mins  = (remaining_secs % 3600) / 60;
-    if days > 0        { format!("{}d {}h", days, hours) }
-    else if hours > 0  { format!("{}h {}m", hours, mins) }
-    else               { format!("{}m", mins.max(1)) }
-}
 
 enum StsCheckResult {
     Valid { account: String, arn: String },

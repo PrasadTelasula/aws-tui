@@ -903,18 +903,9 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
             }
         }
 
-        // SSO: show connected status + expiry
+        // SSO: show connected status
         if matches!(status, SessionStatus::Connected) {
             spans.push(Span::styled("  connected", Style::default().fg(TEAL)));
-            if let Some((_, &remaining)) = app.token_expiry.get(&alias.name).map(|(s, r)| (s, r)).as_ref() {
-                let color = if remaining < 300 { RED }
-                            else if remaining < 1800 { AMBER }
-                            else { FG3 };
-                spans.push(Span::styled(
-                    format!("  exp {}", crate::session::format_expiry(remaining)),
-                    Style::default().fg(color),
-                ));
-            }
         }
         if matches!(status, SessionStatus::Expired) {
             spans.push(Span::styled("  expired", Style::default().fg(AMBER)));
@@ -1104,12 +1095,14 @@ fn draw_right(f: &mut Frame, area: Rect, app: &App) {
         lines.push(kv(ICON_KEY, "Token", vec![
             Span::styled(token_display, Style::default().fg(FG3)),
         ]));
-        let exp_color = if c.remaining_secs < 300 { RED }
-                        else if c.remaining_secs < 1800 { AMBER }
-                        else { GREEN };
-        lines.push(kv(ICON_CLOCK, "Expires", vec![
-            Span::styled(crate::session::format_expiry(c.remaining_secs), Style::default().fg(exp_color)),
-            Span::styled(format!("  {}", c.expiration), Style::default().fg(FG3)),
+        lines.push(kv(ICON_CLOCK, "Expiration", vec![
+            Span::styled(&c.expiration, Style::default().fg(FG2)),
+        ]));
+        lines.push(kv(ICON_CLOCK, "Local Time", vec![
+            Span::styled(
+                chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
+                Style::default().fg(FG2),
+            ),
         ]));
     }
 
@@ -1459,15 +1452,13 @@ fn draw_credentials_popup(f: &mut Frame, area: Rect, app: &App) {
     add_field(&mut lines, "SecretAccessKey", &creds.secret_access_key, AMBER);
     add_field(&mut lines, "SessionToken",   &creds.session_token,     FG);
 
-    let exp_color = if creds.remaining_secs < 300 { RED }
-                    else if creds.remaining_secs < 1800 { AMBER }
-                    else { GREEN };
-    let expiry_str = format!(
-        "{}  ({})",
-        creds.expiration,
-        crate::session::format_expiry(creds.remaining_secs),
+    add_field(&mut lines, "Expiration", &creds.expiration, FG2);
+    add_field(
+        &mut lines,
+        "Local Time",
+        &chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
+        FG2,
     );
-    add_field(&mut lines, "Expiration", &expiry_str, exp_color);
 
     lines.push(Line::from(""));
     lines.push(Line::from(vec![

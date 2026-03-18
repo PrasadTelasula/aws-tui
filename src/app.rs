@@ -1,4 +1,3 @@
-use base64::Engine as _;
 use crate::instances::InstancesState;
 use crate::parser::{Alias, AliasKind};
 use crate::session::{CredentialInfo, SessionKind, SessionManager, SessionStatus};
@@ -6,6 +5,7 @@ use crate::terminal::TerminalState;
 use std::collections::HashMap;
 use std::io::Write as _;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::time::Instant;
 use tokio::sync::mpsc;
 
@@ -495,10 +495,9 @@ impl App {
         }
     }
 
-    /// Copy credentials to the system clipboard via OSC 52.
-    /// OSC 52 is supported by iTerm2, kitty, WezTerm, and most modern
-    /// terminal emulators, and works transparently over SSH sessions.
-    /// The payload is formatted as shell export commands for easy pasting.
+    /// Copy credentials to the system clipboard as shell export commands.
+    /// Tries native clipboard tools in order: pbcopy (macOS), wl-copy
+    /// (Wayland), xclip and xsel (X11).
     pub fn copy_credentials_to_clipboard(&mut self) {
         let alias = match self.aliases.get(self.selected_index) {
             Some(a) => a,
@@ -516,17 +515,39 @@ impl App {
             creds.session_token,
         );
 
-        let encoded = base64::engine::general_purpose::STANDARD.encode(&text);
-        // OSC 52: ESC ] 52 ; c ; <base64> BEL
-        let osc52 = format!("\x1b]52;c;{}\x07", encoded);
-
-        // Write directly to stdout — bypasses crossterm's alternate screen
-        if let Ok(mut stdout) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
-            let _ = stdout.write_all(osc52.as_bytes());
+        if write_to_clipboard(text.as_bytes()) {
+            self.show_toast("Copied to clipboard".to_string(), ToastKind::Success);
         } else {
-            let _ = std::io::stdout().write_all(osc52.as_bytes());
+            self.show_toast("No clipboard tool found (pbcopy/wl-copy/xclip/xsel)".to_string(), ToastKind::Error);
         }
-
-        self.show_toast("Credentials copied to clipboard".to_string(), ToastKind::Success);
     }
+}
+
+/// Pipe bytes into the first available clipboard command.
+/// Free function — not part of impl App.
+fn write_to_clipboard(data: &[u8]) -> bool {
+    let candidates: &[(&str, &[&str])] = &[
+        ("pbcopy",   &[]),
+        ("wl-copy",  &[]),
+        ("xclip",    &["-selection", "clipboard"]),
+        ("xsel",     &["--clipboard", "--input"]),
+    ];
+
+    for (cmd, args) in candidates {
+        if let Ok(mut child) = Command::new(cmd)
+            .args(*args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            if let Some(stdin) = child.stdin.as_mut() {
+                let _ = stdin.write_all(data);
+            }
+            if child.wait().map(|s| s.success()).unwrap_or(false) {
+                return true;
+            }
+        }
+    }
+    false
 }

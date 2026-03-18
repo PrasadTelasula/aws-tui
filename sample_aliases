@@ -1,3 +1,7 @@
+# group: Platform type: IAM
+alias platform-dev='aws sts get-caller-identity --profile platform-dev'
+alias platform-prd='aws sts get-caller-identity --profile platform-prd'
+
 # AWS SSO Login aliases
 alias dmscawsprd='aws sso login --sso-session sso-dmsc-prd'
 alias dmscawsstg='aws sso login --sso-session sso-dmsc-stg'

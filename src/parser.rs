@@ -13,6 +13,7 @@ pub enum AliasKind {
         remote_port: Option<String>,
         host: Option<String>,
     },
+    IamProfile { profile_name: String },
     Other,
 }
 
@@ -96,7 +97,15 @@ pub fn parse_aliases(content: &str) -> Vec<Alias> {
         if let Some(caps) = alias_re.captures(line) {
             let name = caps[1].to_string();
             let command = caps[2].to_string();
-            let kind = classify_command(&command);
+            let is_iam_group = current_subgroup
+                .as_deref()
+                .map(|s| s.eq_ignore_ascii_case("iam"))
+                .unwrap_or(false);
+            let kind = if is_iam_group {
+                AliasKind::IamProfile { profile_name: name.clone() }
+            } else {
+                classify_command(&command)
+            };
 
             aliases.push(Alias {
                 name,

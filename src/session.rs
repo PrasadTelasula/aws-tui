@@ -33,6 +33,7 @@ pub enum SessionStatus {
 pub enum SessionKind {
     SsoLogin { session_name: String },
     SsmSession,
+    IamProfile { profile_name: String },
     Other,
 }
 
@@ -413,6 +414,111 @@ impl SessionManager {
             }
         }
     }
+
+    /// On startup: check which IAM profiles in `~/.aws/credentials` are valid.
+    /// For each alias whose group type is IAM, verify the profile exists in the
+    /// credentials file and that `sts get-caller-identity` succeeds.
+    pub async fn check_existing_iam_profiles(
+        &mut self,
+        aliases: &[(String, String)], // (alias_name, profile_name)
+    ) {
+        for (alias_name, profile_name) in aliases {
+            if !iam_profile_exists_in_credentials(profile_name) {
+                continue;
+            }
+
+            match check_sts_identity(profile_name).await {
+                StsCheckResult::Valid { account, arn } => {
+                    let kind = SessionKind::IamProfile {
+                        profile_name: profile_name.clone(),
+                    };
+                    let session = Arc::new(Mutex::new(Session::new(kind)));
+
+                    {
+                        let mut s = session.lock().await;
+                        s.status = SessionStatus::Connected;
+                        s.sso_profile = Some(profile_name.clone());
+                        s.output_lines.push(format!(
+                            ">>> IAM profile '{}' found in ~/.aws/credentials",
+                            profile_name
+                        ));
+                        s.output_lines.push(format!(
+                            ">>> Credentials verified — {} ({})",
+                            arn, account
+                        ));
+                    }
+
+                    if let Some(c) = fetch_credentials(profile_name).await {
+                        let mut s = session.lock().await;
+                        s.credentials = Some(c);
+                    }
+
+                    self.sessions.insert(alias_name.clone(), session);
+                }
+                StsCheckResult::Expired { error } | StsCheckResult::Error { error } => {
+                    // Profile exists but credentials are invalid — register as Error so it's visible
+                    let kind = SessionKind::IamProfile {
+                        profile_name: profile_name.clone(),
+                    };
+                    let session = Arc::new(Mutex::new(Session::new(kind)));
+                    {
+                        let mut s = session.lock().await;
+                        s.status = SessionStatus::Error(error.clone());
+                        s.output_lines.push(format!(
+                            ">>> IAM profile '{}' — credential check failed: {}",
+                            profile_name, error
+                        ));
+                    }
+                    self.sessions.insert(alias_name.clone(), session);
+                }
+            }
+        }
+    }
+
+    /// Re-verify an IAM profile on demand (e.g. when user presses Enter on it).
+    /// Refreshes credentials and updates session state.
+    pub async fn connect_iam_profile(
+        &mut self,
+        alias_name: &str,
+        profile_name: &str,
+    ) -> Result<(), String> {
+        if !iam_profile_exists_in_credentials(profile_name) {
+            return Err(format!(
+                "Profile '{}' not found in ~/.aws/credentials",
+                profile_name
+            ));
+        }
+
+        match check_sts_identity(profile_name).await {
+            StsCheckResult::Valid { account, arn } => {
+                let kind = SessionKind::IamProfile {
+                    profile_name: profile_name.to_string(),
+                };
+                let session = Arc::new(Mutex::new(Session::new(kind)));
+
+                {
+                    let mut s = session.lock().await;
+                    s.status = SessionStatus::Connected;
+                    s.sso_profile = Some(profile_name.to_string());
+                    s.output_lines.push(format!(
+                        ">>> IAM credentials verified — {} ({})",
+                        arn, account
+                    ));
+                }
+
+                if let Some(c) = fetch_credentials(profile_name).await {
+                    let mut s = session.lock().await;
+                    s.credentials = Some(c);
+                }
+
+                self.sessions.insert(alias_name.to_string(), session);
+                Ok(())
+            }
+            StsCheckResult::Expired { error } | StsCheckResult::Error { error } => {
+                Err(format!("Credential verification failed: {}", error))
+            }
+        }
+    }
 }
 
 // ─── Resolve profile name from ~/.aws/config ────────────────────────
@@ -455,6 +561,22 @@ fn resolve_profile_for_sso_session(session_name: &str) -> Option<String> {
     }
 
     None
+}
+
+// ─── IAM credentials file check ─────────────────────────────────────
+// Checks whether a named profile section exists in ~/.aws/credentials.
+
+fn iam_profile_exists_in_credentials(profile_name: &str) -> bool {
+    let creds_path = match dirs::home_dir() {
+        Some(h) => h.join(".aws/credentials"),
+        None => return false,
+    };
+    let content = match fs::read_to_string(creds_path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let target = format!("[{}]", profile_name);
+    content.lines().any(|line| line.trim() == target)
 }
 
 // ─── SSO Liveness Watcher ───────────────────────────────────────────

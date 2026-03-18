@@ -144,7 +144,7 @@ impl App {
         }
     }
 
-    /// Check which SSO sessions are already authenticated on startup.
+    /// Check which SSO and IAM sessions are already authenticated on startup.
     pub async fn check_existing_sessions(&mut self) {
         let sso_aliases: Vec<(String, String)> = self
             .aliases
@@ -158,18 +158,34 @@ impl App {
             })
             .collect();
 
-        if sso_aliases.is_empty() {
-            return;
+        let iam_aliases: Vec<(String, String)> = self
+            .aliases
+            .iter()
+            .filter_map(|a| {
+                if let AliasKind::IamProfile { profile_name } = &a.kind {
+                    Some((a.name.clone(), profile_name.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if !sso_aliases.is_empty() {
+            self.session_manager
+                .check_existing_sso_sessions(&sso_aliases)
+                .await;
         }
 
-        self.session_manager
-            .check_existing_sso_sessions(&sso_aliases)
-            .await;
+        if !iam_aliases.is_empty() {
+            self.session_manager
+                .check_existing_iam_profiles(&iam_aliases)
+                .await;
+        }
 
         // Update statuses from what the session manager found
         for (i, alias) in self.aliases.iter().enumerate() {
             let status = self.session_manager.get_status(&alias.name).await;
-            if status == SessionStatus::Connected {
+            if matches!(status, SessionStatus::Connected | SessionStatus::Error(_)) {
                 self.session_statuses[i] = status;
                 self.session_start_times
                     .insert(alias.name.clone(), Instant::now());
@@ -339,6 +355,9 @@ impl App {
                         AliasKind::SsoLogin { session_name } => {
                             session_name.to_lowercase().contains(&query)
                         }
+                        AliasKind::IamProfile { profile_name } => {
+                            profile_name.to_lowercase().contains(&query)
+                        }
                         _ => false,
                     }
             })
@@ -377,6 +396,25 @@ impl App {
                 }
                 // Port-forwarding — runs fine in the background with piped I/O.
                 SessionKind::SsmSession
+            }
+            AliasKind::IamProfile { profile_name } => {
+                // No login process — verify credentials and refresh on demand.
+                let profile = profile_name.clone();
+                let idx = self.selected_index;
+                match self.session_manager.connect_iam_profile(&name, &profile).await {
+                    Ok(()) => {
+                        self.session_statuses[idx] = SessionStatus::Connected;
+                        self.session_start_times.insert(name.clone(), Instant::now());
+                        self.show_toast(
+                            format!("{} IAM profile {} verified", ICON_CHECK, name),
+                            ToastKind::Success,
+                        );
+                    }
+                    Err(e) => {
+                        self.show_toast(format!("{} {}", ICON_CROSS, e), ToastKind::Error);
+                    }
+                }
+                return;
             }
             AliasKind::Other => SessionKind::Other,
         };
@@ -486,17 +524,27 @@ impl App {
         // Refresh live profiles for the terminal tab
         let mut profiles = Vec::new();
         for (i, alias) in self.aliases.iter().enumerate() {
-            if let AliasKind::SsoLogin { session_name } = &alias.kind {
-                if self.session_statuses[i] == SessionStatus::Connected {
+            if self.session_statuses[i] != SessionStatus::Connected {
+                continue;
+            }
+            match &alias.kind {
+                AliasKind::SsoLogin { session_name } => {
                     let actual_profile = self.session_manager.get_sso_profile(&alias.name).await;
                     let profile_name = actual_profile.unwrap_or_else(|| alias.name.clone());
-
                     profiles.push(crate::terminal::LiveProfile {
                         profile_name,
                         _alias_name: alias.name.clone(),
                         _session_name: session_name.clone(),
                     });
                 }
+                AliasKind::IamProfile { profile_name } => {
+                    profiles.push(crate::terminal::LiveProfile {
+                        profile_name: profile_name.clone(),
+                        _alias_name: alias.name.clone(),
+                        _session_name: String::new(),
+                    });
+                }
+                _ => {}
             }
         }
         self.terminal_state.live_profiles = profiles;

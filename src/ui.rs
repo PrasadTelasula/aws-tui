@@ -855,17 +855,19 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
                 Some(sg) => subgroup_icon(sg),
                 None => {
                     match &alias.kind {
-                        AliasKind::SsoLogin { .. }  => (ICON_SHIELD, BLUE),
-                        AliasKind::SsmSession { .. } => (ICON_PLUG, TEAL),
-                        AliasKind::Other             => (ICON_TAG, FG2),
+                        AliasKind::SsoLogin { .. }   => (ICON_SHIELD, BLUE),
+                        AliasKind::SsmSession { .. }  => (ICON_PLUG, TEAL),
+                        AliasKind::IamProfile { .. }  => (ICON_KEY, AMBER),
+                        AliasKind::Other              => (ICON_TAG, FG2),
                     }
                 }
             };
             let sg_label = alias.subgroup.clone().unwrap_or_else(|| {
                 match &alias.kind {
-                    AliasKind::SsoLogin { .. }  => "SSO".to_string(),
-                    AliasKind::SsmSession { .. } => "SSM".to_string(),
-                    AliasKind::Other             => "Other".to_string(),
+                    AliasKind::SsoLogin { .. }   => "SSO".to_string(),
+                    AliasKind::SsmSession { .. }  => "SSM".to_string(),
+                    AliasKind::IamProfile { .. }  => "IAM".to_string(),
+                    AliasKind::Other              => "Other".to_string(),
                 }
             });
 
@@ -1052,6 +1054,14 @@ fn draw_right(f: &mut Frame, area: Rect, app: &App) {
     ]));
 
     match &a.kind {
+        AliasKind::IamProfile { profile_name } => {
+            lines.push(kv(ICON_KEY, "Type", vec![
+                Span::styled("IAM Profile", Style::default().fg(AMBER)),
+            ]));
+            lines.push(kv(ICON_KEY, "Profile", vec![
+                Span::styled(profile_name.as_str(), Style::default().fg(AMBER)),
+            ]));
+        }
         AliasKind::SsoLogin { session_name } => {
             lines.push(kv(ICON_KEY, "Type", vec![
                 Span::styled("SSO Login", Style::default().fg(FG2)),
@@ -1123,17 +1133,25 @@ fn draw_right(f: &mut Frame, area: Rect, app: &App) {
         lines.push(kv(ICON_KEY, "SecretKey", vec![
             Span::styled(secret_display, Style::default().fg(FG2)),
         ]));
-        let token_display = if c.session_token.len() > 28 {
-            format!("{}…", &c.session_token[..28])
+        if !c.session_token.is_empty() {
+            let token_display = if c.session_token.len() > 28 {
+                format!("{}…", &c.session_token[..28])
+            } else {
+                c.session_token.clone()
+            };
+            lines.push(kv(ICON_KEY, "Token", vec![
+                Span::styled(token_display, Style::default().fg(FG3)),
+            ]));
+        }
+        if !c.expiration.is_empty() {
+            lines.push(kv(ICON_CLOCK, "Expiration", vec![
+                Span::styled(&c.expiration, Style::default().fg(FG2)),
+            ]));
         } else {
-            c.session_token.clone()
-        };
-        lines.push(kv(ICON_KEY, "Token", vec![
-            Span::styled(token_display, Style::default().fg(FG3)),
-        ]));
-        lines.push(kv(ICON_CLOCK, "Expiration", vec![
-            Span::styled(&c.expiration, Style::default().fg(FG2)),
-        ]));
+            lines.push(kv(ICON_CLOCK, "Expiration", vec![
+                Span::styled("No expiry (long-lived key)", Style::default().fg(FG3)),
+            ]));
+        }
         lines.push(kv(ICON_CLOCK, "Local Time", vec![
             Span::styled(
                 chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
@@ -1284,9 +1302,9 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
                 spans.push(desc_span(" stop all  "));
             }
 
-            // Show 'g' credentials hint only for connected SSO sessions
+            // Show 'g' credentials hint for connected SSO or IAM sessions
             let is_sso_connected = app.aliases.get(app.selected_index)
-                .map(|a| matches!(a.kind, crate::parser::AliasKind::SsoLogin { .. }))
+                .map(|a| matches!(a.kind, crate::parser::AliasKind::SsoLogin { .. } | crate::parser::AliasKind::IamProfile { .. }))
                 .unwrap_or(false)
                 && matches!(selected_status, SessionStatus::Connected);
             if is_sso_connected {

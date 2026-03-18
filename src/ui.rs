@@ -86,6 +86,9 @@ pub fn draw(f: &mut Frame, app: &App) {
     if app.show_confirm {
         draw_confirm(f, size, app);
     }
+    if app.show_credentials_popup {
+        draw_credentials_popup(f, size, app);
+    }
     if let Some(ref toast) = app.toast {
         draw_toast(f, size, toast);
     }
@@ -1252,6 +1255,16 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
                 spans.push(desc_span(" stop all  "));
             }
 
+            // Show 'g' credentials hint only for connected SSO sessions
+            let is_sso_connected = app.aliases.get(app.selected_index)
+                .map(|a| matches!(a.kind, crate::parser::AliasKind::SsoLogin { .. }))
+                .unwrap_or(false)
+                && matches!(selected_status, SessionStatus::Connected);
+            if is_sso_connected {
+                spans.push(key_span("g"));
+                spans.push(desc_span(" credentials  "));
+            }
+
             spans.push(key_span("Tab"));
             spans.push(desc_span(" switch  "));
             spans.push(key_span("/"));
@@ -1389,6 +1402,92 @@ fn draw_confirm(f: &mut Frame, area: Rect, app: &App) {
             ]),
         ])
         .block(popup_block("confirm", FG3)),
+        r,
+    );
+}
+
+// ─── CREDENTIALS POPUP ──────────────────────────────────────────────
+
+fn draw_credentials_popup(f: &mut Frame, area: Rect, app: &App) {
+    let a = match app.aliases.get(app.selected_index) {
+        Some(a) => a,
+        None => return,
+    };
+    let creds = match app.session_credentials.get(&a.name) {
+        Some(c) => c,
+        None => return,
+    };
+
+    // Width: fill most of the screen for long tokens
+    let w = area.width.saturating_sub(6).max(40);
+    let inner_w = w.saturating_sub(4) as usize; // usable text width
+
+    // Build content lines
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(""));
+
+    let label_style = Style::default().fg(FG2);
+
+    // Helper: wrap a long value across multiple lines with indent
+    let add_field = |lines: &mut Vec<Line>, label: &str, value: &str, val_color: Color| {
+        let label_prefix = format!("  {:<16} ", label);
+        let prefix_len = label_prefix.chars().count();
+        let avail = inner_w.saturating_sub(prefix_len);
+
+        // Split value into chunks that fit the available width
+        let chars: Vec<char> = value.chars().collect();
+        let first_chunk: String = chars.iter().take(avail).collect();
+        let rest = &chars[first_chunk.chars().count()..];
+
+        lines.push(Line::from(vec![
+            Span::styled(label_prefix.clone(), label_style),
+            Span::styled(first_chunk, Style::default().fg(val_color)),
+        ]));
+
+        // Continuation lines indented to align with value
+        let indent = " ".repeat(prefix_len);
+        for chunk in rest.chunks(inner_w.saturating_sub(prefix_len).max(1)) {
+            let s: String = chunk.iter().collect();
+            lines.push(Line::from(vec![
+                Span::styled(indent.clone(), label_style),
+                Span::styled(s, Style::default().fg(val_color)),
+            ]));
+        }
+    };
+
+    add_field(&mut lines, "AccessKeyId",    &creds.access_key_id,     BLUE);
+    add_field(&mut lines, "SecretAccessKey", &creds.secret_access_key, AMBER);
+    add_field(&mut lines, "SessionToken",   &creds.session_token,     FG);
+
+    let exp_color = if creds.remaining_secs < 300 { RED }
+                    else if creds.remaining_secs < 1800 { AMBER }
+                    else { GREEN };
+    let expiry_str = format!(
+        "{}  ({})",
+        creds.expiration,
+        crate::session::format_expiry(creds.remaining_secs),
+    );
+    add_field(&mut lines, "Expiration", &expiry_str, exp_color);
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  any key to close",
+        Style::default().fg(FG3),
+    )));
+    lines.push(Line::from(""));
+
+    let content_h = lines.len() as u16 + 2; // +2 for border
+    let h = content_h.min(area.height.saturating_sub(4));
+    let x = (area.width.saturating_sub(w)) / 2;
+    let y = (area.height.saturating_sub(h)) / 2;
+    let r = Rect::new(x, y, w, h);
+
+    dim_bg(f, area);
+    f.render_widget(Clear, r);
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(popup_block(&format!("  credentials — {}", a.name), TEAL)),
         r,
     );
 }

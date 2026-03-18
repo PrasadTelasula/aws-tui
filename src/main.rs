@@ -192,6 +192,12 @@ async fn run_app(
 
         if event::poll(tick_rate)? {
             if let Event::Key(key) = event::read()? {
+                // ── Credentials popup ──
+                if app.show_credentials_popup {
+                    app.show_credentials_popup = false;
+                    continue;
+                }
+
                 // ── Confirmation popup ──
                 if app.show_confirm {
                     match key.code {
@@ -558,7 +564,19 @@ async fn run_app(
                         }
                     }
                     KeyCode::Char('g') if app.active_tab == AppTab::Sessions => {
-                        app.selected_index = 0;
+                        // If the selected alias is a connected SSO session, open
+                        // the credentials popup; otherwise fall back to go-to-top.
+                        let is_sso_connected = app.aliases.get(app.selected_index)
+                            .map(|a| matches!(a.kind, crate::parser::AliasKind::SsoLogin { .. }))
+                            .unwrap_or(false)
+                            && app.session_credentials.contains_key(
+                                app.aliases.get(app.selected_index)
+                                    .map(|a| a.name.as_str()).unwrap_or(""));
+                        if is_sso_connected {
+                            app.show_credentials_popup = true;
+                        } else {
+                            app.selected_index = 0;
+                        }
                     }
                     KeyCode::Char('G') if app.active_tab == AppTab::Sessions => {
                         if !app.aliases.is_empty() {

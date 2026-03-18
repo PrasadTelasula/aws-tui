@@ -74,6 +74,7 @@ pub struct App {
     pub show_confirm: bool,
     pub confirm_message: String,
     pub confirm_action: ConfirmAction,
+    pub show_credentials_popup: bool,
     pub _alias_file: PathBuf,
     pub list_scroll_offset: usize,
     /// Set when an interactive SSM shell session needs the real TTY.
@@ -127,6 +128,7 @@ impl App {
             show_confirm: false,
             confirm_message: String::new(),
             confirm_action: ConfirmAction::None,
+            show_credentials_popup: false,
             _alias_file: alias_file,
             list_scroll_offset: 0,
             pending_ssm_command: None,

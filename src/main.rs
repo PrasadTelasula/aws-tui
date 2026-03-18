@@ -401,6 +401,12 @@ async fn run_app(
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         app.should_quit = true;
                     }
+                    KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && app.active_tab == AppTab::Sessions
+                        && app.input_mode == InputMode::Normal =>
+                    {
+                        app.reload_aliases();
+                    }
 
                     // Terminal tab: normal mode keys
                     KeyCode::Char('i') if app.active_tab == AppTab::Terminal => {

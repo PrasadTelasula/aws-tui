@@ -77,7 +77,7 @@ pub struct App {
     pub confirm_message: String,
     pub confirm_action: ConfirmAction,
     pub show_credentials_popup: bool,
-    pub _alias_file: PathBuf,
+    pub alias_file: PathBuf,
     pub list_scroll_offset: usize,
     /// Set when an interactive SSM shell session needs the real TTY.
     /// The main loop suspends the TUI, runs this command with inherited
@@ -131,7 +131,7 @@ impl App {
             confirm_message: String::new(),
             confirm_action: ConfirmAction::None,
             show_credentials_popup: false,
-            _alias_file: alias_file,
+            alias_file,
             list_scroll_offset: 0,
             pending_ssm_command: None,
             active_tab: AppTab::Sessions,
@@ -192,6 +192,44 @@ impl App {
                 self.toast = None;
             }
         }
+    }
+
+    pub fn reload_aliases(&mut self) {
+        use crate::parser::parse_alias_file;
+
+        let mut new_aliases = parse_alias_file(&self.alias_file);
+        new_aliases.sort_by(|a, b| {
+            a.group
+                .cmp(&b.group)
+                .then(a.subgroup.as_deref().unwrap_or("").cmp(b.subgroup.as_deref().unwrap_or("")))
+                .then(a.name.cmp(&b.name))
+        });
+
+        // Preserve session statuses for aliases that still exist by name
+        let new_statuses: Vec<SessionStatus> = new_aliases
+            .iter()
+            .map(|a| {
+                self.aliases
+                    .iter()
+                    .position(|old| old.name == a.name)
+                    .map(|i| self.session_statuses[i].clone())
+                    .unwrap_or(SessionStatus::Stopped)
+            })
+            .collect();
+
+        let count = new_aliases.len();
+        self.aliases = new_aliases;
+        self.session_statuses = new_statuses;
+        self.filtered_indices = Vec::new();
+        self.search_query = String::new();
+        if self.selected_index >= count {
+            self.selected_index = count.saturating_sub(1);
+        }
+
+        self.show_toast(
+            format!("Reloaded {} aliases from file", count),
+            ToastKind::Success,
+        );
     }
 
     pub fn show_toast(&mut self, message: String, kind: ToastKind) {

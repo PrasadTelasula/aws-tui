@@ -1298,6 +1298,8 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
             spans.push(desc_span(" switch  "));
             spans.push(key_span("/"));
             spans.push(desc_span(" search  "));
+            spans.push(key_span("Ctrl+R"));
+            spans.push(desc_span(" reload  "));
         }
         AppTab::Instances => {
             if app.input_mode == InputMode::SsmInput {

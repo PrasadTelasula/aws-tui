@@ -466,11 +466,14 @@ async fn sso_liveness_watcher(
             break;
         }
 
-        // Read token expiry from SSO cache (sync file I/O — do before locking)
-        let expiry = read_sso_token_expiry(&sso_session_name);
-
-        // Run sts get-caller-identity to check liveness
+        // Run sts get-caller-identity first — this may trigger AWS CLI to refresh
+        // an expired access token and write a fresh cache file.
         let check_result = check_sts_identity(&profile).await;
+
+        // Read token expiry AFTER STS so we see the freshly-written cache file.
+        // scan_sso_token_expiry returns the file with the latest expiresAt among
+        // all matching files, avoiding stale expired entries from previous logins.
+        let expiry = read_sso_token_expiry(&sso_session_name);
 
         {
             let mut s = session.lock().await;
@@ -482,13 +485,17 @@ async fn sso_liveness_watcher(
 
             match check_result {
                 StsCheckResult::Valid { account, arn } => {
-                    // Prefer real expiry from cache; fall back to account label
-                    if let Some((exp_str, remaining)) = expiry {
-                        s.token_expires_at = Some(exp_str);
-                        s.token_remaining_secs = Some(remaining);
-                    } else {
-                        s.token_expires_at = Some(format!("account: {}", account));
-                        s.token_remaining_secs = None;
+                    match expiry {
+                        // Cache has a valid (non-expired) token — show real expiry
+                        Some((ref exp_str, remaining)) if remaining > 0 => {
+                            s.token_expires_at = Some(exp_str.clone());
+                            s.token_remaining_secs = Some(remaining);
+                        }
+                        // Cache expired but STS succeeded: token was just refreshed;
+                        // cache file may not be flushed yet — keep previous expiry.
+                        _ => {
+                            s.token_expires_at = Some(format!("account: {}", account));
+                        }
                     }
                     s.output_lines.push(format!(
                         ">>> Session verified — {} ({})",
@@ -537,6 +544,10 @@ fn read_sso_token_expiry(sso_session_name: &str) -> Option<(String, u64)> {
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_secs();
+
+    // Collect ALL matching cache files and pick the one with the latest expiresAt.
+    // Multiple files can exist from previous logins; the newest wins.
+    let mut best: Option<(u64, u64)> = None; // (expiry_unix, remaining)
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -587,12 +598,14 @@ fn read_sso_token_expiry(sso_session_name: &str) -> Option<(String, u64)> {
             None => continue,
         };
 
-        let remaining = expiry_unix.saturating_sub(now);
-        let display = format_expiry(remaining);
-        return Some((display, remaining));
+        // Keep the entry with the latest expiry time
+        if best.map_or(true, |(best_unix, _)| expiry_unix > best_unix) {
+            let remaining = expiry_unix.saturating_sub(now);
+            best = Some((expiry_unix, remaining));
+        }
     }
 
-    None
+    best.map(|(_, remaining)| (format_expiry(remaining), remaining))
 }
 
 /// Read sso_start_url from the [sso-session <name>] section of ~/.aws/config.

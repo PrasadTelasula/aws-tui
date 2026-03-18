@@ -545,9 +545,12 @@ fn read_sso_token_expiry(sso_session_name: &str) -> Option<(String, u64)> {
         .ok()?
         .as_secs();
 
-    // Collect ALL matching cache files and pick the one with the latest expiresAt.
-    // Multiple files can exist from previous logins; the newest wins.
-    let mut best: Option<(u64, u64)> = None; // (expiry_unix, remaining)
+    // Two-pass scan: prefer sessionName-matched files (exact, session-scoped);
+    // fall back to startUrl only if no sessionName match exists at all.
+    // This prevents cross-session contamination when multiple SSO sessions share
+    // the same portal URL but have different session names.
+    let mut best_name: Option<(u64, u64)> = None; // from sessionName match
+    let mut best_url: Option<(u64, u64)> = None;  // from startUrl fallback
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -568,14 +571,31 @@ fn read_sso_token_expiry(sso_session_name: &str) -> Option<(String, u64)> {
             continue;
         }
 
-        // Match by sessionName (AWS CLI v2 newer format) …
+        let expires_at = match json.get("expiresAt").and_then(|v| v.as_str()) {
+            Some(s) => s,
+            None => continue,
+        };
+        let expiry_unix = match parse_iso8601_to_unix(expires_at) {
+            Some(t) => t,
+            None => continue,
+        };
+        let remaining = expiry_unix.saturating_sub(now);
+
+        // Match by sessionName (AWS CLI v2) — exact, session-scoped
         let name_match = json
             .get("sessionName")
             .and_then(|v| v.as_str())
             .map(|s| s == sso_session_name)
             .unwrap_or(false);
 
-        // … or by startUrl (older format / fallback)
+        if name_match {
+            if best_name.map_or(true, |(b, _)| expiry_unix > b) {
+                best_name = Some((expiry_unix, remaining));
+            }
+            continue; // don't double-count as url_match
+        }
+
+        // Fallback: match by startUrl (older AWS CLI v1 format, no sessionName)
         let url_match = start_url
             .as_deref()
             .zip(json.get("startUrl").and_then(|v| v.as_str()))
@@ -584,27 +604,15 @@ fn read_sso_token_expiry(sso_session_name: &str) -> Option<(String, u64)> {
             })
             .unwrap_or(false);
 
-        if !name_match && !url_match {
-            continue;
-        }
-
-        let expires_at = match json.get("expiresAt").and_then(|v| v.as_str()) {
-            Some(s) => s,
-            None => continue,
-        };
-
-        let expiry_unix = match parse_iso8601_to_unix(expires_at) {
-            Some(t) => t,
-            None => continue,
-        };
-
-        // Keep the entry with the latest expiry time
-        if best.map_or(true, |(best_unix, _)| expiry_unix > best_unix) {
-            let remaining = expiry_unix.saturating_sub(now);
-            best = Some((expiry_unix, remaining));
+        if url_match {
+            if best_url.map_or(true, |(b, _)| expiry_unix > b) {
+                best_url = Some((expiry_unix, remaining));
+            }
         }
     }
 
+    // sessionName match takes priority over startUrl fallback
+    let best = best_name.or(best_url);
     best.map(|(_, remaining)| (format_expiry(remaining), remaining))
 }
 

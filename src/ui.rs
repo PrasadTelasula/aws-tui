@@ -1147,10 +1147,6 @@ fn draw_right(f: &mut Frame, area: Rect, app: &App) {
             lines.push(kv(ICON_CLOCK, "Expiration", vec![
                 Span::styled(&c.expiration, Style::default().fg(FG2)),
             ]));
-        } else {
-            lines.push(kv(ICON_CLOCK, "Expiration", vec![
-                Span::styled("No expiry (long-lived key)", Style::default().fg(FG3)),
-            ]));
         }
         lines.push(kv(ICON_CLOCK, "Local Time", vec![
             Span::styled(
@@ -1509,9 +1505,11 @@ fn draw_credentials_popup(f: &mut Frame, area: Rect, app: &App) {
 
     add_field(&mut lines, "AccessKeyId",    &creds.access_key_id,     BLUE);
     add_field(&mut lines, "SecretAccessKey", &creds.secret_access_key, AMBER);
-    add_field(&mut lines, "SessionToken",   &creds.session_token,     FG);
 
-    add_field(&mut lines, "Expiration", &creds.expiration, FG2);
+    if !matches!(a.kind, AliasKind::IamProfile { .. }) {
+        add_field(&mut lines, "SessionToken", &creds.session_token, FG);
+        add_field(&mut lines, "Expiration",   &creds.expiration,    FG2);
+    }
     add_field(
         &mut lines,
         "Local Time",

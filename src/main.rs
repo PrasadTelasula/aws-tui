@@ -78,21 +78,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    let mut sorted_aliases = aliases;
-    sorted_aliases.sort_by(|a, b| {
-        a.group
-            .cmp(&b.group)
-            .then(a.subgroup.as_deref().unwrap_or("").cmp(b.subgroup.as_deref().unwrap_or("")))
-            .then(a.name.cmp(&b.name))
-    });
-
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(sorted_aliases, alias_file);
+    let mut app = App::new(aliases, alias_file);
     app.check_existing_sessions().await;
 
     let result = run_app(&mut terminal, &mut app).await;

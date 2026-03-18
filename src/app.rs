@@ -197,13 +197,7 @@ impl App {
     pub fn reload_aliases(&mut self) {
         use crate::parser::parse_alias_file;
 
-        let mut new_aliases = parse_alias_file(&self.alias_file);
-        new_aliases.sort_by(|a, b| {
-            a.group
-                .cmp(&b.group)
-                .then(a.subgroup.as_deref().unwrap_or("").cmp(b.subgroup.as_deref().unwrap_or("")))
-                .then(a.name.cmp(&b.name))
-        });
+        let new_aliases = parse_alias_file(&self.alias_file);
 
         // Preserve session statuses for aliases that still exist by name
         let new_statuses: Vec<SessionStatus> = new_aliases

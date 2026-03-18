@@ -26,18 +26,6 @@ pub struct Alias {
 
 impl Alias {}
 
-fn detect_group(name: &str) -> String {
-    let lower = name.to_lowercase();
-    if lower.starts_with("dmsc") {
-        "DMSC".to_string()
-    } else if lower.starts_with("watermark") {
-        "Watermark".to_string()
-    } else if lower.starts_with("runner") {
-        "Runner".to_string()
-    } else {
-        "Other".to_string()
-    }
-}
 
 fn parse_ssm_parameters(params_str: &str) -> HashMap<String, Vec<String>> {
     let mut result = HashMap::new();
@@ -82,13 +70,23 @@ pub fn parse_alias_file(path: &Path) -> Vec<Alias> {
 
 pub fn parse_aliases(content: &str) -> Vec<Alias> {
     let alias_re = Regex::new(r#"^\s*alias\s+([a-zA-Z0-9_-]+)\s*=\s*'(.+?)'\s*$"#).unwrap();
+    let group_re = Regex::new(r"(?i)#\s*group:\s*(.+)").unwrap();
     let mut aliases = Vec::new();
+    let mut current_group = "Other".to_string();
 
     for line in content.lines() {
         let line = line.trim();
 
-        // Skip comments and empty lines
-        if line.is_empty() || line.starts_with('#') {
+        if line.is_empty() {
+            continue;
+        }
+
+        if let Some(caps) = group_re.captures(line) {
+            current_group = caps[1].trim().to_string();
+            continue;
+        }
+
+        if line.starts_with('#') {
             continue;
         }
 
@@ -96,13 +94,12 @@ pub fn parse_aliases(content: &str) -> Vec<Alias> {
             let name = caps[1].to_string();
             let command = caps[2].to_string();
             let kind = classify_command(&command);
-            let group = detect_group(&name);
 
             aliases.push(Alias {
                 name,
                 command,
                 kind,
-                group,
+                group: current_group.clone(),
             });
         }
     }

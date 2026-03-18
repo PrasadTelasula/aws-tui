@@ -517,7 +517,7 @@ async fn sso_liveness_watcher(
             }
         }
 
-        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
     }
 }
 

@@ -1110,7 +1110,7 @@ fn draw_right(f: &mut Frame, area: Rect, app: &App) {
     if matches!(st, SessionStatus::Connected) {
         lines.push(kv(ICON_CLOCK, "Status", vec![
             Span::styled("verified", Style::default().fg(GREEN)),
-            Span::styled("  (checked every 60s)", Style::default().fg(FG3)),
+            Span::styled("  (checked every 5m)", Style::default().fg(FG3)),
         ]));
     } else if matches!(st, SessionStatus::Expired) {
         lines.push(kv(ICON_CLOCK, "Status", vec![

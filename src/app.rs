@@ -1,8 +1,10 @@
+use base64::Engine as _;
 use crate::instances::InstancesState;
 use crate::parser::{Alias, AliasKind};
 use crate::session::{CredentialInfo, SessionKind, SessionManager, SessionStatus};
 use crate::terminal::TerminalState;
 use std::collections::HashMap;
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -491,5 +493,40 @@ impl App {
                 .or_default()
                 .push(line);
         }
+    }
+
+    /// Copy credentials to the system clipboard via OSC 52.
+    /// OSC 52 is supported by iTerm2, kitty, WezTerm, and most modern
+    /// terminal emulators, and works transparently over SSH sessions.
+    /// The payload is formatted as shell export commands for easy pasting.
+    pub fn copy_credentials_to_clipboard(&mut self) {
+        let alias = match self.aliases.get(self.selected_index) {
+            Some(a) => a,
+            None => return,
+        };
+        let creds = match self.session_credentials.get(&alias.name) {
+            Some(c) => c.clone(),
+            None => return,
+        };
+
+        let text = format!(
+            "export AWS_ACCESS_KEY_ID=\"{}\"\nexport AWS_SECRET_ACCESS_KEY=\"{}\"\nexport AWS_SESSION_TOKEN=\"{}\"",
+            creds.access_key_id,
+            creds.secret_access_key,
+            creds.session_token,
+        );
+
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&text);
+        // OSC 52: ESC ] 52 ; c ; <base64> BEL
+        let osc52 = format!("\x1b]52;c;{}\x07", encoded);
+
+        // Write directly to stdout — bypasses crossterm's alternate screen
+        if let Ok(mut stdout) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
+            let _ = stdout.write_all(osc52.as_bytes());
+        } else {
+            let _ = std::io::stdout().write_all(osc52.as_bytes());
+        }
+
+        self.show_toast("Credentials copied to clipboard".to_string(), ToastKind::Success);
     }
 }

@@ -1470,10 +1470,13 @@ fn draw_credentials_popup(f: &mut Frame, area: Rect, app: &App) {
     add_field(&mut lines, "Expiration", &expiry_str, exp_color);
 
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  any key to close",
-        Style::default().fg(FG3),
-    )));
+    lines.push(Line::from(vec![
+        Span::styled("  ", Style::default()),
+        Span::styled("c", Style::default().fg(TEAL).add_modifier(Modifier::BOLD)),
+        Span::styled(" copy as shell exports  ", Style::default().fg(FG3)),
+        Span::styled("any other key", Style::default().fg(FG3)),
+        Span::styled(" close", Style::default().fg(FG3)),
+    ]));
     lines.push(Line::from(""));
 
     let content_h = lines.len() as u16 + 2; // +2 for border

@@ -194,6 +194,9 @@ async fn run_app(
             if let Event::Key(key) = event::read()? {
                 // ── Credentials popup ──
                 if app.show_credentials_popup {
+                    if key.code == KeyCode::Char('c') {
+                        app.copy_credentials_to_clipboard();
+                    }
                     app.show_credentials_popup = false;
                     continue;
                 }

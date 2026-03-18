@@ -1198,7 +1198,7 @@ fn draw_right(f: &mut Frame, area: Rect, app: &App) {
 fn kv<'a>(icon: &'a str, label: &'a str, values: Vec<Span<'a>>) -> Line<'a> {
     let mut v = vec![
         Span::styled(format!(" {} ", icon), Style::default().fg(FG3)),
-        Span::styled(format!("{:<10}", label), Style::default().fg(FG3)),
+        Span::styled(format!("{:<14}", label), Style::default().fg(FG3)),
     ];
     v.extend(values);
     Line::from(v)

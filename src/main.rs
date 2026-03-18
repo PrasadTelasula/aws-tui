@@ -558,15 +558,19 @@ async fn run_app(
                         }
                     }
                     KeyCode::Char('g') if app.active_tab == AppTab::Sessions => {
-                        // If the selected alias is a connected SSO session, open
-                        // the credentials popup; otherwise fall back to go-to-top.
-                        let is_sso_connected = app.aliases.get(app.selected_index)
-                            .map(|a| matches!(a.kind, crate::parser::AliasKind::SsoLogin { .. }))
+                        // Open credentials popup for connected SSO or IAM sessions;
+                        // otherwise fall back to go-to-top.
+                        let is_cred_connected = app.aliases.get(app.selected_index)
+                            .map(|a| matches!(
+                                a.kind,
+                                crate::parser::AliasKind::SsoLogin { .. }
+                                    | crate::parser::AliasKind::IamProfile { .. }
+                            ))
                             .unwrap_or(false)
                             && app.session_credentials.contains_key(
                                 app.aliases.get(app.selected_index)
                                     .map(|a| a.name.as_str()).unwrap_or(""));
-                        if is_sso_connected {
+                        if is_cred_connected {
                             app.show_credentials_popup = true;
                         } else {
                             app.selected_index = 0;

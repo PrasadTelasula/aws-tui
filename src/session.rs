@@ -448,7 +448,8 @@ impl SessionManager {
                         ));
                     }
 
-                    if let Some(c) = fetch_credentials(profile_name).await {
+                    // Read directly from ~/.aws/credentials (no shell-out needed)
+                    if let Some(c) = read_iam_credentials_from_file(profile_name) {
                         let mut s = session.lock().await;
                         s.credentials = Some(c);
                     }
@@ -506,7 +507,8 @@ impl SessionManager {
                     ));
                 }
 
-                if let Some(c) = fetch_credentials(profile_name).await {
+                // Read directly from ~/.aws/credentials (no shell-out needed)
+                if let Some(c) = read_iam_credentials_from_file(profile_name) {
                     let mut s = session.lock().await;
                     s.credentials = Some(c);
                 }
@@ -577,6 +579,54 @@ fn iam_profile_exists_in_credentials(profile_name: &str) -> bool {
     };
     let target = format!("[{}]", profile_name);
     content.lines().any(|line| line.trim() == target)
+}
+
+// ─── Direct IAM credential reader ───────────────────────────────────
+// Reads aws_access_key_id and aws_secret_access_key directly from
+// ~/.aws/credentials for a named profile section. Does not shell out.
+
+fn read_iam_credentials_from_file(profile_name: &str) -> Option<CredentialInfo> {
+    let creds_path = dirs::home_dir()?.join(".aws/credentials");
+    let content = fs::read_to_string(creds_path).ok()?;
+
+    let target_section = format!("[{}]", profile_name);
+    let mut in_section = false;
+    let mut access_key = String::new();
+    let mut secret_key = String::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            if in_section {
+                // Entered next section — stop
+                break;
+            }
+            in_section = trimmed == target_section;
+            continue;
+        }
+
+        if in_section {
+            if let Some((key, value)) = trimmed.split_once('=') {
+                match key.trim().to_lowercase().as_str() {
+                    "aws_access_key_id" => access_key = value.trim().to_string(),
+                    "aws_secret_access_key" => secret_key = value.trim().to_string(),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    if access_key.is_empty() || secret_key.is_empty() {
+        return None;
+    }
+
+    Some(CredentialInfo {
+        access_key_id: access_key,
+        secret_access_key: secret_key,
+        session_token: String::new(),
+        expiration: String::new(),
+    })
 }
 
 // ─── SSO Liveness Watcher ───────────────────────────────────────────

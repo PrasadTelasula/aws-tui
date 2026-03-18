@@ -1,3 +1,4 @@
+use chrono::{DateTime, Local};
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
@@ -556,55 +557,19 @@ async fn fetch_credentials(profile: &str) -> Option<CredentialInfo> {
     let access_key_id    = json.get("AccessKeyId").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let secret_access_key = json.get("SecretAccessKey").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let session_token    = json.get("SessionToken").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let expiration       = json.get("Expiration").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let expiration_raw = json.get("Expiration").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs();
+    // Parse as RFC 3339 (handles any UTC offset, e.g. +00:00, -07:00, Z)
+    let expiry_dt = DateTime::parse_from_rfc3339(&expiration_raw).ok()?;
+    let now = Local::now();
+    let remaining = expiry_dt.signed_duration_since(now).num_seconds().max(0) as u64;
+    // Display in the user's local time so it matches their wall clock
+    let expiration_local = expiry_dt
+        .with_timezone(&Local)
+        .format("%b %d %H:%M:%S")
+        .to_string();
 
-    let remaining = parse_iso8601_to_unix(&expiration)
-        .map(|t| t.saturating_sub(now))
-        .unwrap_or(0);
-
-    Some(CredentialInfo { access_key_id, secret_access_key, session_token, expiration, remaining_secs: remaining })
-}
-
-/// Parse an ISO 8601 UTC timestamp to a Unix timestamp (seconds).
-/// Handles: "2024-01-15T10:30:00UTC", "…Z", "…+00:00", "…+0000"
-fn parse_iso8601_to_unix(s: &str) -> Option<u64> {
-    let s = s.trim();
-    // Strip timezone suffix
-    let s = s
-        .strip_suffix("UTC")
-        .or_else(|| s.strip_suffix('Z'))
-        .or_else(|| s.strip_suffix("+00:00"))
-        .or_else(|| s.strip_suffix("+0000"))
-        .unwrap_or(s);
-
-    if s.len() < 19 {
-        return None;
-    }
-    let year: i64  = s.get(0..4)?.parse().ok()?;
-    let month: i64 = s.get(5..7)?.parse().ok()?;
-    let day: i64   = s.get(8..10)?.parse().ok()?;
-    let hour: i64  = s.get(11..13)?.parse().ok()?;
-    let min: i64   = s.get(14..16)?.parse().ok()?;
-    let sec: i64   = s.get(17..19)?.parse().ok()?;
-
-    // Days since 1970-01-01 — Howard Hinnant's civil_from_days inverse
-    let y   = if month <= 2 { year - 1 } else { year };
-    let m   = month;
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146097 + doe - 719468;
-
-    if days < 0 {
-        return None;
-    }
-    Some((days * 86400 + hour * 3600 + min * 60 + sec) as u64)
+    Some(CredentialInfo { access_key_id, secret_access_key, session_token, expiration: expiration_local, remaining_secs: remaining })
 }
 
 /// Format remaining seconds as a human-readable string: "3d 2h", "1h 14m", "45m"

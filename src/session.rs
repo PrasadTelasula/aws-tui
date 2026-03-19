@@ -7,6 +7,81 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+/// If the command contains a tag-based `--target` (e.g. `--target "tag:Name=foo,Env=prod"`),
+/// look up the first running EC2 instance matching those tags and return the command with
+/// the tag spec replaced by the resolved instance ID.  Returns the command unchanged when
+/// no `tag:` prefix is found.
+pub async fn resolve_tag_target_in_command(command: &str) -> Result<String, String> {
+    // Match --target with or without surrounding double-quotes
+    let tag_re = Regex::new(r#"--target\s+"?(tag:[^"\s]+)"?"#).unwrap();
+
+    let caps = match tag_re.captures(command) {
+        Some(c) => c,
+        None => return Ok(command.to_string()),
+    };
+
+    let full_match = caps[0].to_string(); // e.g. `--target "tag:Name=foo"`
+    let tag_spec = caps[1].to_string();   // e.g. `tag:Name=foo,Env=prod`
+
+    // Build ec2 --filters from "Key1=Val1,Key2=Val2"
+    let tag_part = tag_spec.strip_prefix("tag:").unwrap_or(&tag_spec);
+    let mut filters: Vec<String> = tag_part
+        .split(',')
+        .filter_map(|pair| {
+            let mut it = pair.splitn(2, '=');
+            let key = it.next()?.trim();
+            let val = it.next()?.trim();
+            Some(format!("Name=tag:{},Values={}", key, val))
+        })
+        .collect();
+    filters.push("Name=instance-state-name,Values=running".to_string());
+
+    // Extract --region and --profile from the command if present
+    let region_re = Regex::new(r"--region\s+(\S+)").unwrap();
+    let profile_re = Regex::new(r"--profile\s+(\S+)").unwrap();
+    let region = region_re.captures(command).map(|c| c[1].to_string());
+    let profile = profile_re.captures(command).map(|c| c[1].to_string());
+
+    let mut ec2_cmd = Command::new("aws");
+    ec2_cmd
+        .arg("ec2")
+        .arg("describe-instances")
+        .arg("--query")
+        .arg("Reservations[0].Instances[0].InstanceId")
+        .arg("--output")
+        .arg("text")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    for f in &filters {
+        ec2_cmd.arg("--filters").arg(f);
+    }
+    if let Some(r) = &region {
+        ec2_cmd.arg("--region").arg(r);
+    }
+    if let Some(p) = &profile {
+        ec2_cmd.arg("--profile").arg(p);
+    }
+
+    let output = ec2_cmd
+        .output()
+        .await
+        .map_err(|e| format!("EC2 lookup failed: {}", e))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("EC2 describe-instances failed: {}", err.trim()));
+    }
+
+    let instance_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    if instance_id.is_empty() || instance_id == "None" {
+        return Err(format!("No running instance found matching {}", tag_spec));
+    }
+
+    Ok(command.replace(&full_match, &format!("--target {}", instance_id)))
+}
+
 /// Wraps the JSON value after `--parameters` in single quotes so the shell
 /// does not interpret curly braces, square brackets, or double quotes.
 fn quote_parameters_for_shell(command: &str) -> String {

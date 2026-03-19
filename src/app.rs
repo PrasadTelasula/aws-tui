@@ -1,6 +1,8 @@
 use crate::instances::InstancesState;
 use crate::parser::{Alias, AliasKind};
-use crate::session::{CredentialInfo, SessionKind, SessionManager, SessionStatus};
+use crate::session::{
+    resolve_tag_target_in_command, CredentialInfo, SessionKind, SessionManager, SessionStatus,
+};
 use crate::terminal::TerminalState;
 use std::collections::HashMap;
 use std::io::Write as _;
@@ -377,7 +379,18 @@ impl App {
         }
         let alias = &self.aliases[self.selected_index];
         let name = alias.name.clone();
-        let command = alias.command.clone();
+        let mut command = alias.command.clone();
+
+        // Resolve tag-based --target to a real instance ID before starting
+        if matches!(&alias.kind, AliasKind::SsmSession { .. }) {
+            match resolve_tag_target_in_command(&command).await {
+                Ok(resolved) => command = resolved,
+                Err(e) => {
+                    self.show_toast(format!("{} {}", ICON_CROSS, e), ToastKind::Error);
+                    return;
+                }
+            }
+        }
 
         let kind = match &alias.kind {
             AliasKind::SsoLogin { session_name } => SessionKind::SsoLogin {

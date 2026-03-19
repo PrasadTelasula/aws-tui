@@ -803,6 +803,155 @@ fn draw_instances(f: &mut Frame, area: Rect, app: &App) {
             dropdown_area,
         );
     }
+
+    // Instance info popup
+    if is.show_info_popup {
+        draw_instance_info_popup(f, area, app);
+    }
+}
+
+fn draw_instance_info_popup(f: &mut Frame, area: Rect, app: &App) {
+    use crate::instances::InfoTab;
+    let is = &app.instances_state;
+    let popup = match &is.info_popup {
+        Some(p) => p,
+        None => return,
+    };
+
+    let w = area.width.saturating_sub(4).min(110);
+    let h = area.height.saturating_sub(4).min(40);
+    let x = (area.width.saturating_sub(w)) / 2;
+    let y = (area.height.saturating_sub(h)) / 2;
+    let pop_area = Rect::new(x, y, w, h);
+
+    dim_bg(f, area);
+    f.render_widget(Clear, pop_area);
+
+    // ── Tab bar + border ─────────────────────────────────────────────
+    let title_human = if popup.tab == InfoTab::Human {
+        Span::styled(" 󰋼 Human ", Style::default().fg(BG).bg(TEAL).add_modifier(Modifier::BOLD))
+    } else {
+        Span::styled(" 󰋼 Human ", Style::default().fg(FG3))
+    };
+    let title_json = if popup.tab == InfoTab::Json {
+        Span::styled("  JSON ", Style::default().fg(BG).bg(BLUE).add_modifier(Modifier::BOLD))
+    } else {
+        Span::styled("  JSON ", Style::default().fg(FG3))
+    };
+    let title_hint = Span::styled("   Tab: switch  j/k: scroll  Esc: close ", Style::default().fg(FG4));
+
+    let block = Block::default()
+        .title(Line::from(vec![title_human, Span::raw(" "), title_json, title_hint]))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(TEAL))
+        .style(Style::default().bg(BG_BAR));
+
+    let inner = block.inner(pop_area);
+    f.render_widget(block, pop_area);
+
+    if popup.loading {
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                format!("  {} Fetching instance details…", app.spinner()),
+                Style::default().fg(AMBER),
+            )),
+            inner,
+        );
+        return;
+    }
+
+    // ── Content ──────────────────────────────────────────────────────
+    let lines_data = popup.lines();
+    let scroll = popup.scroll as usize;
+    let visible_h = inner.height as usize;
+
+    let lines: Vec<Line> = lines_data
+        .iter()
+        .skip(scroll)
+        .take(visible_h)
+        .map(|l| {
+            if l.starts_with("──") {
+                // Section header
+                Line::from(Span::styled(l.as_str(), Style::default().fg(TEAL).add_modifier(Modifier::BOLD)))
+            } else if l.starts_with("  Error") {
+                Line::from(Span::styled(l.as_str(), Style::default().fg(RED)))
+            } else if popup.tab == InfoTab::Json {
+                // JSON syntax colouring: keys in blue, strings in green, numbers in amber
+                colorize_json_line(l)
+            } else {
+                // Human: label in FG3, value in FG
+                if let Some(idx) = l.find("  ").filter(|_| l.starts_with("  ") && l.len() > 2) {
+                    // find the gap between label and value (multiple spaces after label)
+                    let trimmed = &l[2..]; // strip leading 2 spaces
+                    if let Some(gap) = trimmed.find("  ") {
+                        let label = &trimmed[..gap];
+                        let value = trimmed[gap..].trim_start();
+                        Line::from(vec![
+                            Span::raw("  "),
+                            Span::styled(format!("{:<18}", label), Style::default().fg(FG3)),
+                            Span::styled(value.to_string(), Style::default().fg(FG)),
+                        ])
+                    } else {
+                        let _ = idx;
+                        Line::from(Span::styled(l.as_str(), Style::default().fg(FG2)))
+                    }
+                } else {
+                    Line::from(Span::styled(l.as_str(), Style::default().fg(FG2)))
+                }
+            }
+        })
+        .collect();
+
+    f.render_widget(Paragraph::new(lines), inner);
+
+    // Scrollbar
+    let total = lines_data.len();
+    if total > visible_h {
+        let mut sb = ScrollbarState::new(total).position(scroll);
+        f.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight).style(Style::default().fg(FG4)),
+            inner,
+            &mut sb,
+        );
+    }
+}
+
+/// Basic JSON syntax colouring for a single line.
+fn colorize_json_line(line: &str) -> Line<'static> {
+    let owned = line.to_string();
+    // Key: "key":  → blue
+    // String value: "value" → green
+    // Number/bool/null → amber
+    // Structural chars → FG3
+    let trimmed = owned.trim_start();
+    let indent = &owned[..owned.len() - owned.trim_start().len()];
+
+    if let Some(colon_pos) = trimmed.find("\": ") {
+        // Has a key
+        let key_end = colon_pos + 1; // up to closing quote of key
+        let key_part = &trimmed[..key_end + 1];   // "key":
+        let rest = &trimmed[key_end + 2..];        // space + value
+        let value_color = if rest.trim_start().starts_with('"') {
+            GREEN
+        } else if rest.trim_start() == "null" || rest.trim_start() == "true" || rest.trim_start() == "false" {
+            MAUVE
+        } else {
+            AMBER
+        };
+        Line::from(vec![
+            Span::raw(indent.to_string()),
+            Span::styled(key_part.to_string(), Style::default().fg(BLUE)),
+            Span::raw(":".to_string()),
+            Span::styled(rest.to_string(), Style::default().fg(value_color)),
+        ])
+    } else {
+        // No key — structural or pure value
+        let color = if trimmed.starts_with('"') { GREEN }
+            else if trimmed == "null" || trimmed == "true" || trimmed == "false" { MAUVE }
+            else { FG3 };
+        Line::from(Span::styled(owned, Style::default().fg(color)))
+    }
 }
 
 // ─── BODY (Sessions tab) ────────────────────────────────────────────

@@ -2,6 +2,44 @@ use std::process::Stdio;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
+// ─── Instance info popup ─────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum InfoTab {
+    Human,
+    Json,
+}
+
+pub struct InstanceInfoPopup {
+    pub loading: bool,
+    pub tab: InfoTab,
+    pub scroll: u16,
+    pub human_lines: Vec<String>,
+    pub json_lines: Vec<String>,
+}
+
+impl InstanceInfoPopup {
+    pub fn new_loading() -> Self {
+        Self { loading: true, tab: InfoTab::Human, scroll: 0, human_lines: Vec::new(), json_lines: Vec::new() }
+    }
+
+    pub fn lines(&self) -> &Vec<String> {
+        match self.tab {
+            InfoTab::Human => &self.human_lines,
+            InfoTab::Json  => &self.json_lines,
+        }
+    }
+
+    pub fn scroll_down(&mut self, n: u16) {
+        let max = self.lines().len().saturating_sub(1) as u16;
+        self.scroll = (self.scroll + n).min(max);
+    }
+
+    pub fn scroll_up(&mut self, n: u16) {
+        self.scroll = self.scroll.saturating_sub(n);
+    }
+}
+
 /// AWS regions
 pub const REGIONS: &[&str] = &[
     "us-east-1", "us-east-2", "us-west-1", "us-west-2",
@@ -67,9 +105,17 @@ pub struct InstancesState {
     pub search_active: bool,
     pub filtered_instances: Vec<usize>,
 
+    // Instance info popup
+    pub show_info_popup: bool,
+    pub info_popup: Option<InstanceInfoPopup>,
+
     // Channel for instance fetch results
     fetch_tx: mpsc::UnboundedSender<Vec<Ec2Instance>>,
     fetch_rx: mpsc::UnboundedReceiver<Vec<Ec2Instance>>,
+
+    // Channel for instance info popup results
+    info_tx: mpsc::UnboundedSender<InstanceInfoPopup>,
+    info_rx: mpsc::UnboundedReceiver<InstanceInfoPopup>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -82,6 +128,7 @@ pub enum InstanceFocus {
 impl InstancesState {
     pub fn new() -> Self {
         let (fetch_tx, fetch_rx) = mpsc::unbounded_channel();
+        let (info_tx, info_rx) = mpsc::unbounded_channel();
 
         Self {
             profiles: Vec::new(),
@@ -100,8 +147,12 @@ impl InstancesState {
             search_query: String::new(),
             search_active: false,
             filtered_instances: Vec::new(),
+            show_info_popup: false,
+            info_popup: None,
             fetch_tx,
             fetch_rx,
+            info_tx,
+            info_rx,
         }
     }
 
@@ -229,6 +280,11 @@ impl InstancesState {
             }
         }
 
+        // Process instance info popup results
+        while let Ok(popup) = self.info_rx.try_recv() {
+            self.info_popup = Some(popup);
+        }
+
         // Process instance fetch results
         while let Ok(instances) = self.fetch_rx.try_recv() {
             self.instances = instances;
@@ -283,6 +339,74 @@ impl InstancesState {
             };
 
             let _ = tx.send(instances);
+        });
+    }
+
+    // ── Instance info popup ──────────────────────────────────────────
+
+    pub fn fetch_instance_info(&mut self) {
+        if self.instances.is_empty() {
+            return;
+        }
+        let instance = &self.instances[self.selected_instance];
+        let instance_id = instance.instance_id.clone();
+        let profile = match self.active_profile() {
+            Some(p) => p.to_string(),
+            None => return,
+        };
+        let region = self.active_region().to_string();
+        let tx = self.info_tx.clone();
+
+        self.show_info_popup = true;
+        self.info_popup = Some(InstanceInfoPopup::new_loading());
+
+        tokio::spawn(async move {
+            let output = Command::new("aws")
+                .args([
+                    "ec2", "describe-instances",
+                    "--instance-ids", &instance_id,
+                    "--region", &region,
+                    "--profile", &profile,
+                    "--output", "json",
+                ])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .stdin(Stdio::null())
+                .output()
+                .await;
+
+            let popup = match output {
+                Ok(out) if out.status.success() => {
+                    let raw = String::from_utf8_lossy(&out.stdout).to_string();
+                    let human = format_instance_human(&raw);
+                    let json_lines = format_json_pretty(&raw);
+                    InstanceInfoPopup {
+                        loading: false,
+                        tab: InfoTab::Human,
+                        scroll: 0,
+                        human_lines: human,
+                        json_lines,
+                    }
+                }
+                Ok(out) => {
+                    let err = String::from_utf8_lossy(&out.stderr).to_string();
+                    InstanceInfoPopup {
+                        loading: false,
+                        tab: InfoTab::Human,
+                        scroll: 0,
+                        human_lines: vec![format!("Error: {}", err)],
+                        json_lines: vec![format!("Error: {}", err)],
+                    }
+                }
+                Err(e) => InstanceInfoPopup {
+                    loading: false,
+                    tab: InfoTab::Human,
+                    scroll: 0,
+                    human_lines: vec![format!("Error: {}", e)],
+                    json_lines: vec![format!("Error: {}", e)],
+                },
+            };
+            let _ = tx.send(popup);
         });
     }
 
@@ -452,4 +576,137 @@ fn parse_instances(json: &str) -> Vec<Ec2Instance> {
             }
         })
         .collect()
+}
+
+/// Format the raw describe-instances JSON into human-readable lines.
+fn format_instance_human(json: &str) -> Vec<String> {
+    let root: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => return vec![format!("Parse error: {}", e)],
+    };
+
+    let inst = match root["Reservations"][0]["Instances"][0].as_object() {
+        Some(o) => o,
+        None => return vec!["No instance data found.".to_string()],
+    };
+
+    let mut lines: Vec<String> = Vec::new();
+
+    let str_val = |v: &serde_json::Value| v.as_str().unwrap_or("-").to_string();
+
+    // ── Identity ─────────────────────────────────────────────────────
+    lines.push("── Identity ─────────────────────────────────────────".to_string());
+    lines.push(format!("  Instance ID      {}", str_val(&inst["InstanceId"])));
+    lines.push(format!("  Instance Type    {}", str_val(&inst["InstanceType"])));
+    lines.push(format!("  Architecture     {}", str_val(&inst["Architecture"])));
+    let platform = inst.get("Platform").and_then(|v| v.as_str()).unwrap_or("Linux");
+    lines.push(format!("  Platform         {}", platform));
+    lines.push(format!("  AMI ID           {}", str_val(&inst["ImageId"])));
+    lines.push(String::new());
+
+    // ── State ─────────────────────────────────────────────────────────
+    lines.push("── State ────────────────────────────────────────────".to_string());
+    lines.push(format!("  State            {}", str_val(&inst["State"]["Name"])));
+    lines.push(format!("  Launch Time      {}", str_val(&inst["LaunchTime"])));
+    if let Some(reason) = inst.get("StateTransitionReason").and_then(|v| v.as_str()) {
+        if !reason.is_empty() {
+            lines.push(format!("  State Reason     {}", reason));
+        }
+    }
+    lines.push(String::new());
+
+    // ── Network ────────────────────────────────────────────────────────
+    lines.push("── Network ──────────────────────────────────────────".to_string());
+    lines.push(format!("  Private IP       {}", str_val(&inst["PrivateIpAddress"])));
+    lines.push(format!("  Private DNS      {}", str_val(&inst["PrivateDnsName"])));
+    if let Some(ip) = inst.get("PublicIpAddress").and_then(|v| v.as_str()) {
+        lines.push(format!("  Public IP        {}", ip));
+    }
+    if let Some(dns) = inst.get("PublicDnsName").and_then(|v| v.as_str()) {
+        if !dns.is_empty() {
+            lines.push(format!("  Public DNS       {}", dns));
+        }
+    }
+    lines.push(format!("  VPC ID           {}", str_val(&inst["VpcId"])));
+    lines.push(format!("  Subnet ID        {}", str_val(&inst["SubnetId"])));
+    if let Some(az) = inst["Placement"]["AvailabilityZone"].as_str() {
+        lines.push(format!("  Availability Zone {}", az));
+    }
+    lines.push(String::new());
+
+    // ── Security ────────────────────────────────────────────────────────
+    lines.push("── Security ─────────────────────────────────────────".to_string());
+    if let Some(key) = inst.get("KeyName").and_then(|v| v.as_str()) {
+        lines.push(format!("  Key Pair         {}", key));
+    }
+    if let Some(arn) = inst["IamInstanceProfile"]["Arn"].as_str() {
+        // Show just the role name from the ARN
+        let role = arn.split('/').last().unwrap_or(arn);
+        lines.push(format!("  IAM Role         {}", role));
+    }
+    if let Some(sgs) = inst.get("SecurityGroups").and_then(|v| v.as_array()) {
+        for sg in sgs {
+            lines.push(format!("  Security Group   {} ({})",
+                str_val(&sg["GroupId"]),
+                str_val(&sg["GroupName"])));
+        }
+    }
+    lines.push(String::new());
+
+    // ── Compute ────────────────────────────────────────────────────────
+    lines.push("── Compute ──────────────────────────────────────────".to_string());
+    if let (Some(cores), Some(threads)) = (
+        inst["CpuOptions"]["CoreCount"].as_u64(),
+        inst["CpuOptions"]["ThreadsPerCore"].as_u64(),
+    ) {
+        lines.push(format!("  vCPUs            {}", cores * threads));
+        lines.push(format!("  CPU Cores        {}  ({} thread(s)/core)", cores, threads));
+    }
+    if let Some(ebs) = inst.get("EbsOptimized").and_then(|v| v.as_bool()) {
+        lines.push(format!("  EBS Optimized    {}", if ebs { "yes" } else { "no" }));
+    }
+    if let Some(mon) = inst["Monitoring"]["State"].as_str() {
+        lines.push(format!("  Monitoring       {}", mon));
+    }
+    lines.push(String::new());
+
+    // ── Storage ────────────────────────────────────────────────────────
+    if let Some(vols) = inst.get("BlockDeviceMappings").and_then(|v| v.as_array()) {
+        if !vols.is_empty() {
+            lines.push("── Storage ──────────────────────────────────────────".to_string());
+            for vol in vols {
+                let dev  = str_val(&vol["DeviceName"]);
+                let vid  = str_val(&vol["Ebs"]["VolumeId"]);
+                let del  = vol["Ebs"]["DeleteOnTermination"].as_bool().unwrap_or(false);
+                lines.push(format!("  {} → {}  (delete-on-term: {})", dev, vid, if del { "yes" } else { "no" }));
+            }
+            lines.push(String::new());
+        }
+    }
+
+    // ── Tags ────────────────────────────────────────────────────────────
+    if let Some(tags) = inst.get("Tags").and_then(|v| v.as_array()) {
+        if !tags.is_empty() {
+            lines.push("── Tags ─────────────────────────────────────────────".to_string());
+            for tag in tags {
+                lines.push(format!("  {:<24} {}",
+                    str_val(&tag["Key"]),
+                    str_val(&tag["Value"])));
+            }
+            lines.push(String::new());
+        }
+    }
+
+    lines
+}
+
+/// Pretty-print JSON, one key-value pair per line with indentation.
+fn format_json_pretty(json: &str) -> Vec<String> {
+    match serde_json::from_str::<serde_json::Value>(json) {
+        Ok(v) => match serde_json::to_string_pretty(&v) {
+            Ok(pretty) => pretty.lines().map(|l| l.to_string()).collect(),
+            Err(_) => json.lines().map(|l| l.to_string()).collect(),
+        },
+        Err(_) => json.lines().map(|l| l.to_string()).collect(),
+    }
 }

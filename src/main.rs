@@ -347,6 +347,49 @@ async fn run_app(
                     continue;
                 }
 
+                // ── Instance info popup ──
+                if app.instances_state.show_info_popup
+                    && app.active_tab == AppTab::Instances
+                    && app.input_mode == InputMode::Normal
+                {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('q') => {
+                            app.instances_state.show_info_popup = false;
+                        }
+                        KeyCode::Tab => {
+                            if let Some(ref mut p) = app.instances_state.info_popup {
+                                p.tab = match p.tab {
+                                    instances::InfoTab::Human => instances::InfoTab::Json,
+                                    instances::InfoTab::Json  => instances::InfoTab::Human,
+                                };
+                                p.scroll = 0;
+                            }
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            if let Some(ref mut p) = app.instances_state.info_popup {
+                                p.scroll_down(1);
+                            }
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            if let Some(ref mut p) = app.instances_state.info_popup {
+                                p.scroll_up(1);
+                            }
+                        }
+                        KeyCode::PageDown => {
+                            if let Some(ref mut p) = app.instances_state.info_popup {
+                                p.scroll_down(10);
+                            }
+                        }
+                        KeyCode::PageUp => {
+                            if let Some(ref mut p) = app.instances_state.info_popup {
+                                p.scroll_up(10);
+                            }
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 // ── Instance search mode ──
                 if app.instances_state.search_active
                     && app.active_tab == AppTab::Instances
@@ -517,9 +560,20 @@ async fn run_app(
                         app.instances_state.fetch_instances();
                     }
                     KeyCode::Char('i') if app.active_tab == AppTab::Instances => {
-                        if !app.instances_state.ssm_sessions.is_empty() {
-                            app.instances_state.focus = instances::InstanceFocus::SsmTerminal;
-                            app.input_mode = InputMode::SsmInput;
+                        match app.instances_state.focus {
+                            instances::InstanceFocus::InstanceList => {
+                                // Show instance info popup
+                                if !app.instances_state.instances.is_empty() {
+                                    app.instances_state.fetch_instance_info();
+                                }
+                            }
+                            _ => {
+                                // Switch to SSM terminal input
+                                if !app.instances_state.ssm_sessions.is_empty() {
+                                    app.instances_state.focus = instances::InstanceFocus::SsmTerminal;
+                                    app.input_mode = InputMode::SsmInput;
+                                }
+                            }
                         }
                     }
                     // [ / ] — cycle between open SSM sessions in normal mode

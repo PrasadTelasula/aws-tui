@@ -347,6 +347,32 @@ async fn run_app(
                     continue;
                 }
 
+                // ── Instance search mode ──
+                if app.instances_state.search_active
+                    && app.active_tab == AppTab::Instances
+                    && app.input_mode == InputMode::Normal
+                {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Enter => {
+                            app.instances_state.search_active = false;
+                            if key.code == KeyCode::Esc {
+                                app.instances_state.search_query.clear();
+                                app.instances_state.filtered_instances.clear();
+                            }
+                        }
+                        KeyCode::Backspace => {
+                            app.instances_state.search_query.pop();
+                            app.instances_state.update_instance_search();
+                        }
+                        KeyCode::Char(c) => {
+                            app.instances_state.search_query.push(c);
+                            app.instances_state.update_instance_search();
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 // ── SSM Input mode (Instances tab) — forward raw bytes to PTY ──
                 if app.input_mode == InputMode::SsmInput {
                     match key.code {
@@ -473,6 +499,19 @@ async fn run_app(
                         if app.instances_state.region_dropdown_open {
                             app.instances_state.region_dropdown_open = false;
                         }
+                    }
+                    KeyCode::Char('/') if app.active_tab == AppTab::Instances
+                        && app.instances_state.focus == instances::InstanceFocus::InstanceList =>
+                    {
+                        app.instances_state.search_active = true;
+                        app.instances_state.search_query.clear();
+                        app.instances_state.filtered_instances.clear();
+                    }
+                    KeyCode::Esc if app.active_tab == AppTab::Instances
+                        && !app.instances_state.search_query.is_empty() =>
+                    {
+                        app.instances_state.search_query.clear();
+                        app.instances_state.filtered_instances.clear();
                     }
                     KeyCode::Char('r') if app.active_tab == AppTab::Instances => {
                         app.instances_state.fetch_instances();

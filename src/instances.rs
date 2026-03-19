@@ -18,6 +18,7 @@ pub struct Ec2Instance {
     pub _state: String,
     pub private_ip: String,
     pub _instance_type: String,
+    pub platform: String,  // "windows" or "linux"
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -61,6 +62,11 @@ pub struct InstancesState {
     pub pty_size: (u16, u16),        // shared panel size used for new sessions + resize
     pub last_error: Option<String>,  // last connection error to show in hint area
 
+    // Search
+    pub search_query: String,
+    pub search_active: bool,
+    pub filtered_instances: Vec<usize>,
+
     // Channel for instance fetch results
     fetch_tx: mpsc::UnboundedSender<Vec<Ec2Instance>>,
     fetch_rx: mpsc::UnboundedReceiver<Vec<Ec2Instance>>,
@@ -91,6 +97,9 @@ impl InstancesState {
             active_session_idx: 0,
             pty_size: (24, 80),
             last_error: None,
+            search_query: String::new(),
+            search_active: false,
+            filtered_instances: Vec::new(),
             fetch_tx,
             fetch_rx,
         }
@@ -133,18 +142,46 @@ impl InstancesState {
     }
 
     pub fn next_instance(&mut self) {
-        if !self.instances.is_empty() {
+        if !self.filtered_instances.is_empty() {
+            let pos = self.filtered_instances.iter().position(|&i| i == self.selected_instance).unwrap_or(0);
+            self.selected_instance = self.filtered_instances[(pos + 1) % self.filtered_instances.len()];
+        } else if !self.instances.is_empty() {
             self.selected_instance = (self.selected_instance + 1) % self.instances.len();
         }
     }
 
     pub fn prev_instance(&mut self) {
-        if !self.instances.is_empty() {
+        if !self.filtered_instances.is_empty() {
+            let pos = self.filtered_instances.iter().position(|&i| i == self.selected_instance).unwrap_or(0);
+            let prev = if pos == 0 { self.filtered_instances.len() - 1 } else { pos - 1 };
+            self.selected_instance = self.filtered_instances[prev];
+        } else if !self.instances.is_empty() {
             self.selected_instance = if self.selected_instance == 0 {
                 self.instances.len() - 1
             } else {
                 self.selected_instance - 1
             };
+        }
+    }
+
+    pub fn update_instance_search(&mut self) {
+        if self.search_query.is_empty() {
+            self.filtered_instances.clear();
+            return;
+        }
+        let query = self.search_query.to_lowercase();
+        self.filtered_instances = self.instances.iter().enumerate()
+            .filter(|(_, inst)| {
+                inst.name.to_lowercase().contains(&query)
+                    || inst.instance_id.to_lowercase().contains(&query)
+                    || inst.private_ip.contains(&query)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if !self.filtered_instances.is_empty()
+            && !self.filtered_instances.contains(&self.selected_instance)
+        {
+            self.selected_instance = self.filtered_instances[0];
         }
     }
 
@@ -197,6 +234,9 @@ impl InstancesState {
             self.instances = instances;
             self.selected_instance = 0;
             self.loading_instances = false;
+            self.search_query.clear();
+            self.search_active = false;
+            self.filtered_instances.clear();
         }
     }
 
@@ -220,7 +260,7 @@ impl InstancesState {
                     "--region", &region,
                     "--profile", &profile,
                     "--filters", "Name=instance-state-name,Values=running",
-                    "--query", "Reservations[].Instances[].{InstanceId:InstanceId,Name:Tags[?Key==`Name`]|[0].Value,State:State.Name,PrivateIp:PrivateIpAddress,Type:InstanceType}",
+                    "--query", "Reservations[].Instances[].{InstanceId:InstanceId,Name:Tags[?Key==`Name`]|[0].Value,State:State.Name,PrivateIp:PrivateIpAddress,Type:InstanceType,Platform:Platform}",
                     "--output", "json",
                 ])
                 .stdout(Stdio::piped())
@@ -396,12 +436,20 @@ fn parse_instances(json: &str) -> Vec<Ec2Instance> {
 
     parsed
         .iter()
-        .map(|v| Ec2Instance {
-            instance_id: v["InstanceId"].as_str().unwrap_or("-").to_string(),
-            name: v["Name"].as_str().unwrap_or("(no name)").to_string(),
-            _state: v["State"].as_str().unwrap_or("-").to_string(),
-            private_ip: v["PrivateIp"].as_str().unwrap_or("-").to_string(),
-            _instance_type: v["Type"].as_str().unwrap_or("-").to_string(),
+        .map(|v| {
+            // Platform is "windows" for Windows; absent/null for Linux
+            let platform = match v["Platform"].as_str() {
+                Some(p) if p.to_lowercase().contains("windows") => "windows",
+                _ => "linux",
+            };
+            Ec2Instance {
+                instance_id: v["InstanceId"].as_str().unwrap_or("-").to_string(),
+                name: v["Name"].as_str().unwrap_or("(no name)").to_string(),
+                _state: v["State"].as_str().unwrap_or("-").to_string(),
+                private_ip: v["PrivateIp"].as_str().unwrap_or("-").to_string(),
+                _instance_type: v["Type"].as_str().unwrap_or("-").to_string(),
+                platform: platform.to_string(),
+            }
         })
         .collect()
 }

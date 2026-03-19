@@ -57,6 +57,8 @@ const ICON_SHIELD: &str = "\u{f132}";    //  shield (SSO subgroup)
 const ICON_DESKTOP: &str = "\u{f108}";   //  desktop (OS subgroup)
 const ICON_NETWORK: &str = "\u{f0e8}";   //  sitemap (VPN/tunnel subgroup)
 const ICON_TAG: &str = "\u{f02b}";       //  tag (generic subgroup)
+const ICON_LINUX: &str = "\u{f17c}";    //  Tux (Linux)
+const ICON_WINDOWS: &str = "\u{f17a}";  //  Windows logo
 
 // ════════════════════════════════════════════════════════════════════
 
@@ -509,10 +511,10 @@ fn draw_instances(f: &mut Frame, area: Rect, app: &App) {
         .collect();
     f.render_widget(Paragraph::new(div_lines), div_area);
 
-    // Left panel: regions + instances
+    // Left panel: region | search bar | instances
     let left_split = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(3)])
+        .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Min(3)])
         .split(left_area);
 
     // Region selector (single line showing current, opens dropdown)
@@ -535,6 +537,26 @@ fn draw_instances(f: &mut Frame, area: Rect, app: &App) {
     ];
     f.render_widget(Paragraph::new(Line::from(region_spans)), left_split[0]);
 
+    // Search bar
+    let search_spans = if is.search_active {
+        vec![
+            Span::styled(" / ", Style::default().fg(BLUE).add_modifier(Modifier::BOLD)),
+            Span::styled(is.search_query.as_str(), Style::default().fg(FG)),
+            Span::styled("█", Style::default().fg(BLUE)),
+        ]
+    } else if !is.search_query.is_empty() {
+        vec![
+            Span::styled(" / ", Style::default().fg(TEAL)),
+            Span::styled(is.search_query.as_str(), Style::default().fg(TEAL)),
+            Span::styled("  Esc to clear", Style::default().fg(FG4)),
+        ]
+    } else {
+        vec![
+            Span::styled("   / to search", Style::default().fg(FG4)),
+        ]
+    };
+    f.render_widget(Paragraph::new(Line::from(search_spans)), left_split[1]);
+
     // Instance list
     let inst_active = is.focus == InstanceFocus::InstanceList;
     let mut items: Vec<ListItem> = Vec::new();
@@ -549,33 +571,55 @@ fn draw_instances(f: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(FG4),
         ))));
     } else {
-        for (i, inst) in is.instances.iter().enumerate() {
-            let selected = i == is.selected_instance;
-            let sel_bar = if selected && inst_active {
-                Span::styled("▌", Style::default().fg(BLUE))
-            } else {
-                Span::styled(" ", Style::default())
-            };
+        let visible: Vec<usize> = if !is.filtered_instances.is_empty() {
+            is.filtered_instances.clone()
+        } else if !is.search_query.is_empty() {
+            vec![] // query active but no matches
+        } else {
+            (0..is.instances.len()).collect()
+        };
 
-            let name_style = if selected {
-                Style::default().fg(FG).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(FG2)
-            };
+        if visible.is_empty() && !is.search_query.is_empty() {
+            items.push(ListItem::new(Line::from(Span::styled(
+                "  no matches",
+                Style::default().fg(FG4),
+            ))));
+        } else {
+            for i in visible {
+                let inst = &is.instances[i];
+                let selected = i == is.selected_instance;
+                let sel_bar = if selected && inst_active {
+                    Span::styled("▌", Style::default().fg(BLUE))
+                } else {
+                    Span::styled(" ", Style::default())
+                };
 
-            let mut item = ListItem::new(Line::from(vec![
-                sel_bar,
-                Span::styled(format!(" {} ", inst.name), name_style),
-                Span::styled(inst.instance_id.as_str(), Style::default().fg(FG3)),
-                Span::styled(format!("  {}", inst.private_ip), Style::default().fg(FG4)),
-            ]));
-            if selected && inst_active {
-                item = item.style(Style::default().bg(BG_HL));
+                let name_style = if selected {
+                    Style::default().fg(FG).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(FG2)
+                };
+
+                let (os_icon, os_color) = if inst.platform == "windows" {
+                    (ICON_WINDOWS, BLUE)
+                } else {
+                    (ICON_LINUX, TEAL)
+                };
+                let mut item = ListItem::new(Line::from(vec![
+                    sel_bar,
+                    Span::styled(format!(" {} ", os_icon), Style::default().fg(os_color)),
+                    Span::styled(format!("{} ", inst.name), name_style),
+                    Span::styled(inst.instance_id.as_str(), Style::default().fg(FG3)),
+                    Span::styled(format!("  {}", inst.private_ip), Style::default().fg(FG4)),
+                ]));
+                if selected && inst_active {
+                    item = item.style(Style::default().bg(BG_HL));
+                }
+                items.push(item);
             }
-            items.push(item);
         }
     }
-    f.render_widget(List::new(items), left_split[1]);
+    f.render_widget(List::new(items), left_split[2]);
 
     // Right panel: SSM terminals
     // Layout: [session tabs (1, only when sessions exist)] [terminal (min)] [status bar (1)]

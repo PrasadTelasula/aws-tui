@@ -926,8 +926,16 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
             Span::styled(&alias.name, name_style),
         ];
 
-        if let AliasKind::SsmSession { local_port: Some(p), .. } = &alias.kind {
-            spans.push(Span::styled(format!(" :{}", p), Style::default().fg(TEAL)));
+        if let AliasKind::SsmSession { local_port, target, .. } = &alias.kind {
+            if let Some(p) = local_port {
+                spans.push(Span::styled(format!(" :{}", p), Style::default().fg(TEAL)));
+            }
+            if let Some(tag_str) = format_tag_target(target) {
+                spans.push(Span::styled(
+                    format!("  Tags: {}", tag_str),
+                    Style::default().fg(FG3),
+                ));
+            }
         }
 
         if matches!(status, SessionStatus::Running) {
@@ -970,6 +978,22 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
 
 fn group_key(a: &crate::parser::Alias) -> String {
     format!("{}:{}", a.group, a.subgroup.as_deref().unwrap_or(""))
+}
+
+/// Converts `tag:Key1=Val1,Key2=Val2` → `Key1:Val1, Key2:Val2`.
+/// Returns `None` when the target is a plain instance ID (not tag-based).
+fn format_tag_target(target: &str) -> Option<String> {
+    let tag_part = target.strip_prefix("tag:")?;
+    let formatted: Vec<String> = tag_part
+        .split(',')
+        .filter_map(|pair| {
+            let mut it = pair.splitn(2, '=');
+            let key = it.next()?.trim();
+            let val = it.next()?.trim();
+            Some(format!("{}:{}", key, val))
+        })
+        .collect();
+    if formatted.is_empty() { None } else { Some(formatted.join(", ")) }
 }
 
 fn subgroup_icon(subgroup: &str) -> (&'static str, Color) {
@@ -1074,9 +1098,15 @@ fn draw_right(f: &mut Frame, area: Rect, app: &App) {
             lines.push(kv(ICON_PLUG, "Type", vec![
                 Span::styled("SSM Port Forward", Style::default().fg(FG2)),
             ]));
-            lines.push(kv(ICON_HASH, "Target", vec![
-                Span::styled(target.as_str(), Style::default().fg(FG3)),
-            ]));
+            if let Some(tag_str) = format_tag_target(target) {
+                lines.push(kv(ICON_TAG, "Tags", vec![
+                    Span::styled(tag_str, Style::default().fg(AMBER)),
+                ]));
+            } else {
+                lines.push(kv(ICON_HASH, "Target", vec![
+                    Span::styled(target.as_str(), Style::default().fg(FG3)),
+                ]));
+            }
             match (local_port, remote_port) {
                 (Some(l), Some(r)) => {
                     lines.push(kv(ICON_GLOBE, "Ports", vec![

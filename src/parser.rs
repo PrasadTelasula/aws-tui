@@ -135,7 +135,7 @@ fn classify_command(command: &str) -> AliasKind {
 
         let target = target_re
             .captures(command)
-            .map(|c| c[1].to_string())
+            .map(|c| c[1].trim_matches('"').to_string())
             .unwrap_or_default();
         let document = doc_re.captures(command).map(|c| c[1].to_string());
 

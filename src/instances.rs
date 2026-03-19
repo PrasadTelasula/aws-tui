@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::process::Stdio;
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -41,6 +42,8 @@ pub struct InstancesState {
     // Profile
     pub profiles: Vec<String>,
     pub active_profile_idx: usize,
+    /// Names of profiles that are IAM (not SSO) — used for UI badging.
+    pub iam_profiles: HashSet<String>,
 
     // Region
     pub region_idx: usize,
@@ -80,6 +83,7 @@ impl InstancesState {
         Self {
             profiles: Vec::new(),
             active_profile_idx: 0,
+            iam_profiles: HashSet::new(),
             region_idx: 3, // us-west-2 default
             regions: REGIONS.iter().map(|s| s.to_string()).collect(),
             instances: Vec::new(),

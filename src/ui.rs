@@ -447,7 +447,7 @@ fn draw_instances(f: &mut Frame, area: Rect, app: &App) {
             Paragraph::new(vec![
                 Line::from(""),
                 Line::from(Span::styled(
-                    "  No active SSO profiles. Connect via the Sessions tab first.",
+                    "  No active profiles. Connect an SSO or IAM profile via the Sessions tab first.",
                     Style::default().fg(FG3),
                 )),
             ]),
@@ -476,15 +476,29 @@ fn draw_instances(f: &mut Frame, area: Rect, app: &App) {
     ];
     for (i, p) in is.profiles.iter().enumerate() {
         let selected = i == is.active_profile_idx;
-        profile_spans.push(Span::styled(
-            format!(" {} ", p),
-            if selected {
-                Style::default().fg(BG).bg(GREEN).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(FG3)
-            },
-        ));
-        profile_spans.push(Span::styled(" ", Style::default()));
+        let is_iam = is.iam_profiles.contains(p);
+        let badge = if is_iam { " IAM" } else { " SSO" };
+        let (badge_fg, badge_bg) = if is_iam { (BG, AMBER) } else { (BG, BLUE) };
+        if selected {
+            profile_spans.push(Span::styled(
+                format!(" {} ", p),
+                Style::default().fg(BG).bg(GREEN).add_modifier(Modifier::BOLD),
+            ));
+            profile_spans.push(Span::styled(
+                badge,
+                Style::default().fg(badge_fg).bg(GREEN).add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            profile_spans.push(Span::styled(
+                format!(" {} ", p),
+                Style::default().fg(FG3),
+            ));
+            profile_spans.push(Span::styled(
+                badge,
+                Style::default().fg(badge_fg).bg(badge_bg),
+            ));
+        }
+        profile_spans.push(Span::styled("  ", Style::default()));
     }
     profile_spans.push(Span::styled(
         format!("    {} {}", ICON_GLOBE, is.active_region()),

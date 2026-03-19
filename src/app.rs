@@ -523,6 +523,7 @@ impl App {
 
         // Refresh live profiles for the terminal tab
         let mut profiles = Vec::new();
+        let mut iam_profile_names = std::collections::HashSet::new();
         for (i, alias) in self.aliases.iter().enumerate() {
             if self.session_statuses[i] != SessionStatus::Connected {
                 continue;
@@ -543,6 +544,7 @@ impl App {
                         _alias_name: alias.name.clone(),
                         _session_name: String::new(),
                     });
+                    iam_profile_names.insert(profile_name.clone());
                 }
                 _ => {}
             }
@@ -555,6 +557,7 @@ impl App {
             .iter()
             .map(|p| p.profile_name.clone())
             .collect();
+        self.instances_state.iam_profiles = iam_profile_names;
         if self.instances_state.profiles != profile_names {
             self.instances_state.profiles = profile_names;
             if self.instances_state.active_profile_idx >= self.instances_state.profiles.len() {

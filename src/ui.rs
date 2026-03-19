@@ -720,15 +720,36 @@ fn draw_instances(f: &mut Frame, area: Rect, app: &App) {
         if cx < term_area.x + term_area.width && cy < term_area.y + term_area.height {
             f.set_cursor_position((cx, cy));
         }
+    } else if let Some(ref err) = is.last_error {
+        // Render error as a centered, word-wrapped bordered box
+        let max_w = term_area.width.saturating_sub(4).min(72);
+        let inner_w = max_w.saturating_sub(2); // inside the border
+        let line_count = err.chars().count() as u16 / inner_w.max(1) + 1;
+        let box_h = (line_count + 2 + 1).min(term_area.height.saturating_sub(2)); // +2 border +1 title
+        let bx = term_area.x + (term_area.width.saturating_sub(max_w)) / 2;
+        let by = term_area.y + (term_area.height.saturating_sub(box_h)) / 2;
+        let err_area = Rect::new(bx, by, max_w, box_h);
+        f.render_widget(Clear, err_area);
+        f.render_widget(
+            Paragraph::new(Span::styled(err.as_str(), Style::default().fg(RED)))
+                .wrap(Wrap { trim: false })
+                .block(
+                    Block::default()
+                        .title(Span::styled(" ✕ Connection Error ", Style::default().fg(RED)))
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
+                        .border_style(Style::default().fg(RED))
+                        .style(Style::default().bg(BG_BAR)),
+                ),
+            err_area,
+        );
     } else {
         // No sessions — show hint
-        let hint = if let Some(ref err) = is.last_error {
-            format!("  Error: {}", err)
-        } else {
-            "  Select an instance and press Enter to connect".to_string()
-        };
         f.render_widget(
-            Paragraph::new(Span::styled(hint, Style::default().fg(FG3))),
+            Paragraph::new(Span::styled(
+                "  Select an instance and press Enter to connect",
+                Style::default().fg(FG3),
+            )),
             term_area,
         );
     }
@@ -1085,6 +1106,16 @@ fn draw_right(f: &mut Frame, area: Rect, app: &App) {
         SessionStatus::Error(e)  => (e.as_str(),     RED),
     };
 
+    // Truncate status text for the one-line header (full error shown in detail section)
+    let max_status_len = (sections[0].width as usize).saturating_sub(a.name.len() + 6);
+    let truncated_status: String;
+    let display_status = if status_text.len() > max_status_len && max_status_len > 3 {
+        truncated_status = format!("{}…", &status_text[..max_status_len.saturating_sub(1)]);
+        truncated_status.as_str()
+    } else {
+        status_text
+    };
+
     let status_dot = match st {
         SessionStatus::Stopped   => Span::styled("· ", Style::default().fg(FG4)),
         SessionStatus::Starting  => Span::styled(format!("{} ", app.spinner()), Style::default().fg(AMBER)),
@@ -1100,7 +1131,7 @@ fn draw_right(f: &mut Frame, area: Rect, app: &App) {
             status_dot,
             Span::styled(&a.name, Style::default().fg(FG).add_modifier(Modifier::BOLD)),
             Span::styled("  ", Style::default()),
-            Span::styled(status_text, Style::default().fg(status_c)),
+            Span::styled(display_status, Style::default().fg(status_c)),
         ])),
         sections[0],
     );
@@ -1116,6 +1147,34 @@ fn draw_right(f: &mut Frame, area: Rect, app: &App) {
     );
 
     let mut lines: Vec<Line> = Vec::new();
+
+    // If in error state, show full error message with word-wrapping at top of details
+    if let SessionStatus::Error(e) = st {
+        let avail_w = pad.width.saturating_sub(2) as usize;
+        let words = e.split_whitespace();
+        let mut current = String::new();
+        for word in words {
+            if current.is_empty() {
+                current.push_str(word);
+            } else if current.len() + 1 + word.len() <= avail_w {
+                current.push(' ');
+                current.push_str(word);
+            } else {
+                lines.push(Line::from(Span::styled(
+                    format!(" × {}", current),
+                    Style::default().fg(RED),
+                )));
+                current = word.to_string();
+            }
+        }
+        if !current.is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!(" × {}", current),
+                Style::default().fg(RED),
+            )));
+        }
+        lines.push(Line::from(""));
+    }
 
     lines.push(kv(ICON_FOLDER, "Group", vec![
         Span::styled(&a.group, Style::default().fg(MAUVE)),
@@ -1620,7 +1679,13 @@ fn draw_credentials_popup(f: &mut Frame, area: Rect, app: &App) {
 // ─── TOAST ──────────────────────────────────────────────────────────
 
 fn draw_toast(f: &mut Frame, area: Rect, toast: &Toast) {
-    let w = (toast.message.len() as u16 + 6).min(area.width.saturating_sub(4));
+    let max_msg_w = area.width.saturating_sub(10) as usize; // leave margin
+    let msg = if toast.message.len() > max_msg_w && max_msg_w > 3 {
+        format!("{}…", &toast.message[..max_msg_w.saturating_sub(1)])
+    } else {
+        toast.message.clone()
+    };
+    let w = (msg.len() as u16 + 6).min(area.width.saturating_sub(4));
     let x = area.width.saturating_sub(w + 2);
     let r = Rect::new(x, 0, w, 3);
     f.render_widget(Clear, r);
@@ -1633,7 +1698,7 @@ fn draw_toast(f: &mut Frame, area: Rect, toast: &Toast) {
 
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            format!("  {}", &toast.message),
+            format!("  {}", msg),
             Style::default().fg(c),
         )))
         .block(

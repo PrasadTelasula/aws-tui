@@ -23,18 +23,21 @@ pub async fn resolve_tag_target_in_command(command: &str) -> Result<String, Stri
     let full_match = caps[0].to_string(); // e.g. `--target "tag:Name=foo"`
     let tag_spec = caps[1].to_string();   // e.g. `tag:Name=foo,Env=prod`
 
-    // Build ec2 --filters from "Key1=Val1,Key2=Val2"
+    // Build ec2 --filters as a JSON array so values are matched exactly,
+    // avoiding shorthand-syntax ambiguity (commas are both key-value and
+    // value-list separators in the shorthand form).
     let tag_part = tag_spec.strip_prefix("tag:").unwrap_or(&tag_spec);
-    let mut filters: Vec<String> = tag_part
+    let mut filter_jsons: Vec<String> = tag_part
         .split(',')
         .filter_map(|pair| {
             let mut it = pair.splitn(2, '=');
-            let key = it.next()?.trim();
-            let val = it.next()?.trim();
-            Some(format!("Name=tag:{},Values={}", key, val))
+            let key = it.next()?.trim().to_string();
+            let val = it.next()?.trim().to_string();
+            Some(format!(r#"{{"Name":"tag:{}","Values":["{}"]}}"#, key, val))
         })
         .collect();
-    filters.push("Name=instance-state-name,Values=running".to_string());
+    filter_jsons.push(r#"{"Name":"instance-state-name","Values":["running"]}"#.to_string());
+    let filter_json = format!("[{}]", filter_jsons.join(","));
 
     // Extract --region and --profile from the command if present
     let region_re = Regex::new(r"--region\s+(\S+)").unwrap();
@@ -53,9 +56,7 @@ pub async fn resolve_tag_target_in_command(command: &str) -> Result<String, Stri
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    for f in &filters {
-        ec2_cmd.arg("--filters").arg(f);
-    }
+    ec2_cmd.arg("--filters").arg(&filter_json);
     if let Some(r) = &region {
         ec2_cmd.arg("--region").arg(r);
     }

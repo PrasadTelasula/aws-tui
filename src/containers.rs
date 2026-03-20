@@ -1,4 +1,4 @@
-use crate::instances::REGIONS;
+use crate::instances::{InstanceInfoPopup, InfoTab, REGIONS};
 use std::process::Stdio;
 use tokio::process::Command;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -106,8 +106,9 @@ pub enum FetchResult {
     EcsClusters(Vec<EcsCluster>),
     EcsServices(String, Vec<EcsService>),           // cluster_name, services
     EcsTasks(String, String, Vec<EcsTaskData>),     // cluster_name, service_name, tasks
-    EksClusters(Vec<EksCluster>),
     EksNodegroups(String, Vec<EksNodegroup>),        // cluster_name, nodegroups
+    EksClusters(Vec<EksCluster>),
+    EcsInfoPopup(InstanceInfoPopup),
     Error(String),
 }
 
@@ -142,6 +143,10 @@ pub struct ContainersState {
     pub loading_eks_nodegroups: bool,
     pub eks_nodegroups_for: String,
 
+    // Info popup (i key)
+    pub show_info_popup: bool,
+    pub info_popup: Option<InstanceInfoPopup>,
+
     pub last_error: Option<String>,
 
     fetch_tx: UnboundedSender<FetchResult>,
@@ -172,6 +177,8 @@ impl ContainersState {
             selected_eks_nodegroup: 0,
             loading_eks_nodegroups: false,
             eks_nodegroups_for: String::new(),
+            show_info_popup: false,
+            info_popup: None,
             last_error: None,
             fetch_tx,
             fetch_rx,
@@ -541,6 +548,9 @@ impl ContainersState {
                     self.eks_nodegroups_for = cluster;
                     self.last_error = None;
                 }
+                FetchResult::EcsInfoPopup(popup) => {
+                    self.info_popup = Some(popup);
+                }
                 FetchResult::Error(e) => {
                     self.loading_ecs_clusters = false;
                     self.loading_eks_clusters = false;
@@ -777,6 +787,43 @@ impl ContainersState {
         });
     }
 
+    // ── ECS info popup ────────────────────────────────────────────────
+
+    pub fn fetch_ecs_info(&mut self) {
+        let item = match self.ecs_tree.get(self.selected_ecs_tree) {
+            Some(i) => i.clone(),
+            None => return,
+        };
+        let profile = match self.active_profile() {
+            Some(p) => p.to_string(),
+            None => return,
+        };
+        let region = self.active_region().to_string();
+        let tx = self.fetch_tx.clone();
+
+        self.show_info_popup = true;
+        self.info_popup = Some(InstanceInfoPopup::new_loading());
+
+        tokio::spawn(async move {
+            let popup = match item.kind {
+                EcsTreeItemKind::Cluster => {
+                    fetch_cluster_info(&item.name, &profile, &region).await
+                }
+                EcsTreeItemKind::Service => {
+                    fetch_service_info(&item.cluster_name, &item.name, &profile, &region).await
+                }
+                EcsTreeItemKind::Task => {
+                    fetch_task_info(&item.cluster_name, &item.name, &profile, &region).await
+                }
+                EcsTreeItemKind::Container => {
+                    // Containers live inside tasks — re-fetch the task and extract this container
+                    fetch_container_info(&item.cluster_name, &item.service_name, &item.name, &item.extra, &profile, &region).await
+                }
+            };
+            let _ = tx.send(FetchResult::EcsInfoPopup(popup));
+        });
+    }
+
     // ── EKS fetching ──────────────────────────────────────────────────
 
     pub fn fetch_eks_clusters(&mut self) {
@@ -936,4 +983,410 @@ impl ContainersState {
             ContainersSubTab::Eks => self.fetch_eks_nodegroups(),
         }
     }
+}
+
+// ─── ECS info popup async helpers ────────────────────────────────────────────
+
+fn make_error_popup(msg: String) -> InstanceInfoPopup {
+    InstanceInfoPopup {
+        loading: false, tab: InfoTab::Human, scroll: 0,
+        human_lines: vec![format!("  Error: {}", msg)],
+        json_lines:  vec![format!("  Error: {}", msg)],
+        search_query: String::new(), search_active: false,
+        search_matches: Vec::new(), search_match_idx: 0,
+    }
+}
+
+fn make_popup(human: Vec<String>, raw_json: &str) -> InstanceInfoPopup {
+    let json_lines = match serde_json::from_str::<serde_json::Value>(raw_json) {
+        Ok(v) => serde_json::to_string_pretty(&v)
+            .unwrap_or_else(|_| raw_json.to_string())
+            .lines().map(|l| l.to_string()).collect(),
+        Err(_) => raw_json.lines().map(|l| l.to_string()).collect(),
+    };
+    InstanceInfoPopup {
+        loading: false, tab: InfoTab::Human, scroll: 0,
+        human_lines: human, json_lines,
+        search_query: String::new(), search_active: false,
+        search_matches: Vec::new(), search_match_idx: 0,
+    }
+}
+
+async fn fetch_cluster_info(name: &str, profile: &str, region: &str) -> InstanceInfoPopup {
+    let out = Command::new("aws")
+        .args(["ecs", "describe-clusters",
+               "--clusters", name,
+               "--include", "STATISTICS", "TAGS",
+               "--region", region, "--profile", profile,
+               "--output", "json"])
+        .stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null())
+        .output().await;
+
+    match out {
+        Ok(o) if o.status.success() => {
+            let raw = String::from_utf8_lossy(&o.stdout).to_string();
+            let human = format_cluster_human(&raw);
+            make_popup(human, &raw)
+        }
+        Ok(o) => make_error_popup(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+        Err(e) => make_error_popup(e.to_string()),
+    }
+}
+
+async fn fetch_service_info(cluster: &str, service: &str, profile: &str, region: &str) -> InstanceInfoPopup {
+    let out = Command::new("aws")
+        .args(["ecs", "describe-services",
+               "--cluster", cluster,
+               "--services", service,
+               "--region", region, "--profile", profile,
+               "--output", "json"])
+        .stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null())
+        .output().await;
+
+    match out {
+        Ok(o) if o.status.success() => {
+            let raw = String::from_utf8_lossy(&o.stdout).to_string();
+            let human = format_service_human(&raw);
+            make_popup(human, &raw)
+        }
+        Ok(o) => make_error_popup(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+        Err(e) => make_error_popup(e.to_string()),
+    }
+}
+
+async fn fetch_task_info(cluster: &str, task_id: &str, profile: &str, region: &str) -> InstanceInfoPopup {
+    let out = Command::new("aws")
+        .args(["ecs", "describe-tasks",
+               "--cluster", cluster,
+               "--tasks", task_id,
+               "--region", region, "--profile", profile,
+               "--output", "json"])
+        .stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null())
+        .output().await;
+
+    match out {
+        Ok(o) if o.status.success() => {
+            let raw = String::from_utf8_lossy(&o.stdout).to_string();
+            let human = format_task_human(&raw, None);
+            make_popup(human, &raw)
+        }
+        Ok(o) => make_error_popup(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+        Err(e) => make_error_popup(e.to_string()),
+    }
+}
+
+async fn fetch_container_info(cluster: &str, service: &str, container_name: &str, image: &str, profile: &str, region: &str) -> InstanceInfoPopup {
+    // First find a task for this service, then describe it and extract this container
+    let list_out = Command::new("aws")
+        .args(["ecs", "list-tasks",
+               "--cluster", cluster,
+               "--service-name", service,
+               "--region", region, "--profile", profile,
+               "--output", "json"])
+        .stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null())
+        .output().await;
+
+    let task_arns: Vec<String> = match list_out {
+        Ok(o) if o.status.success() => {
+            let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap_or_default();
+            v["taskArns"].as_array().unwrap_or(&vec![])
+                .iter().filter_map(|a| a.as_str().map(String::from)).collect()
+        }
+        Ok(o) => return make_error_popup(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+        Err(e) => return make_error_popup(e.to_string()),
+    };
+
+    let task_arn = match task_arns.first() {
+        Some(a) => a.clone(),
+        None => return make_error_popup("No running tasks found for this service".to_string()),
+    };
+
+    let out = Command::new("aws")
+        .args(["ecs", "describe-tasks",
+               "--cluster", cluster,
+               "--tasks", &task_arn,
+               "--region", region, "--profile", profile,
+               "--output", "json"])
+        .stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null())
+        .output().await;
+
+    match out {
+        Ok(o) if o.status.success() => {
+            let raw = String::from_utf8_lossy(&o.stdout).to_string();
+            let human = format_task_human(&raw, Some(container_name));
+            // For JSON, show just this container's data
+            let json_raw = extract_container_json(&raw, container_name)
+                .unwrap_or_else(|| format!("{{ \"name\": \"{}\", \"image\": \"{}\" }}", container_name, image));
+            make_popup(human, &json_raw)
+        }
+        Ok(o) => make_error_popup(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+        Err(e) => make_error_popup(e.to_string()),
+    }
+}
+
+fn extract_container_json(task_json: &str, container_name: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(task_json).ok()?;
+    let containers = v["tasks"][0]["containers"].as_array()?;
+    let c = containers.iter().find(|c| c["name"].as_str() == Some(container_name))?;
+    serde_json::to_string_pretty(c).ok()
+}
+
+// ─── Human formatters ─────────────────────────────────────────────────────────
+
+fn s(v: &serde_json::Value) -> String {
+    v.as_str().unwrap_or("-").to_string()
+}
+
+fn section(lines: &mut Vec<String>, title: &str) {
+    lines.push(format!("── {} {}", title, "─".repeat(48_usize.saturating_sub(title.len() + 4))));
+}
+
+fn field(lines: &mut Vec<String>, label: &str, value: &str) {
+    if value != "-" && !value.is_empty() {
+        lines.push(format!("  {:<24}{}", label, value));
+    }
+}
+
+fn format_cluster_human(json: &str) -> Vec<String> {
+    let root: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => return vec![format!("  Parse error: {}", e)],
+    };
+    let c = match root["clusters"].as_array().and_then(|a| a.first()) {
+        Some(v) => v.clone(),
+        None => return vec!["  No cluster data found.".to_string()],
+    };
+    let mut lines: Vec<String> = Vec::new();
+
+    section(&mut lines, "Identity");
+    field(&mut lines, "Name",   &s(&c["clusterName"]));
+    field(&mut lines, "Status", &s(&c["status"]));
+    field(&mut lines, "ARN",    &s(&c["clusterArn"]));
+    lines.push(String::new());
+
+    section(&mut lines, "Capacity");
+    field(&mut lines, "Active Services",        &c["activeServicesCount"].as_i64().unwrap_or(0).to_string());
+    field(&mut lines, "Running Tasks",          &c["runningTasksCount"].as_i64().unwrap_or(0).to_string());
+    field(&mut lines, "Pending Tasks",          &c["pendingTasksCount"].as_i64().unwrap_or(0).to_string());
+    field(&mut lines, "Container Instances",    &c["registeredContainerInstancesCount"].as_i64().unwrap_or(0).to_string());
+    lines.push(String::new());
+
+    if let Some(providers) = c["capacityProviders"].as_array() {
+        if !providers.is_empty() {
+            section(&mut lines, "Capacity Providers");
+            for p in providers {
+                if let Some(name) = p.as_str() {
+                    lines.push(format!("  {}", name));
+                }
+            }
+            lines.push(String::new());
+        }
+    }
+
+    if let Some(settings) = c["settings"].as_array() {
+        if !settings.is_empty() {
+            section(&mut lines, "Settings");
+            for setting in settings {
+                field(&mut lines, &s(&setting["name"]), &s(&setting["value"]));
+            }
+            lines.push(String::new());
+        }
+    }
+
+    if let Some(tags) = c["tags"].as_array() {
+        if !tags.is_empty() {
+            section(&mut lines, "Tags");
+            for tag in tags {
+                lines.push(format!("  {:<24}{}", s(&tag["key"]), s(&tag["value"])));
+            }
+            lines.push(String::new());
+        }
+    }
+
+    lines
+}
+
+fn format_service_human(json: &str) -> Vec<String> {
+    let root: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => return vec![format!("  Parse error: {}", e)],
+    };
+    let svc = match root["services"].as_array().and_then(|a| a.first()) {
+        Some(v) => v.clone(),
+        None => return vec!["  No service data found.".to_string()],
+    };
+    let mut lines: Vec<String> = Vec::new();
+
+    section(&mut lines, "Identity");
+    field(&mut lines, "Name",            &s(&svc["serviceName"]));
+    field(&mut lines, "Status",          &s(&svc["status"]));
+    field(&mut lines, "ARN",             &s(&svc["serviceArn"]));
+    field(&mut lines, "Cluster",         svc["clusterArn"].as_str().and_then(|a| a.split('/').last()).unwrap_or("-"));
+    field(&mut lines, "Launch Type",     &s(&svc["launchType"]));
+    field(&mut lines, "Scheduling",      &s(&svc["schedulingStrategy"]));
+    field(&mut lines, "Created",         &s(&svc["createdAt"]));
+    lines.push(String::new());
+
+    section(&mut lines, "Scale");
+    field(&mut lines, "Desired",  &svc["desiredCount"].as_i64().unwrap_or(0).to_string());
+    field(&mut lines, "Running",  &svc["runningCount"].as_i64().unwrap_or(0).to_string());
+    field(&mut lines, "Pending",  &svc["pendingCount"].as_i64().unwrap_or(0).to_string());
+    field(&mut lines, "Minimum Healthy", &format!("{}%", svc["deploymentConfiguration"]["minimumHealthyPercent"].as_i64().unwrap_or(0)));
+    field(&mut lines, "Maximum",         &format!("{}%", svc["deploymentConfiguration"]["maximumPercent"].as_i64().unwrap_or(0)));
+    lines.push(String::new());
+
+    let td = svc["taskDefinition"].as_str().and_then(|t| t.split('/').last()).unwrap_or("-");
+    section(&mut lines, "Task Definition");
+    field(&mut lines, "Task Definition", td);
+    lines.push(String::new());
+
+    if let Some(net) = svc.get("networkConfiguration").and_then(|n| n["awsvpcConfiguration"].as_object()) {
+        section(&mut lines, "Network");
+        if let Some(subnets) = net.get("subnets").and_then(|v| v.as_array()) {
+            for sn in subnets { field(&mut lines, "Subnet", sn.as_str().unwrap_or("-")); }
+        }
+        if let Some(sgs) = net.get("securityGroups").and_then(|v| v.as_array()) {
+            for sg in sgs { field(&mut lines, "Security Group", sg.as_str().unwrap_or("-")); }
+        }
+        field(&mut lines, "Assign Public IP", net.get("assignPublicIp").and_then(|v| v.as_str()).unwrap_or("-"));
+        lines.push(String::new());
+    }
+
+    if let Some(lbs) = svc["loadBalancers"].as_array() {
+        if !lbs.is_empty() {
+            section(&mut lines, "Load Balancers");
+            for lb in lbs {
+                let tg = lb["targetGroupArn"].as_str().and_then(|a| a.split('/').nth(1)).unwrap_or("-");
+                field(&mut lines, "Target Group", tg);
+                field(&mut lines, "Container Name", &s(&lb["containerName"]));
+                field(&mut lines, "Container Port", &lb["containerPort"].as_i64().unwrap_or(0).to_string());
+            }
+            lines.push(String::new());
+        }
+    }
+
+    if let Some(deployments) = svc["deployments"].as_array() {
+        if !deployments.is_empty() {
+            section(&mut lines, "Deployments");
+            for d in deployments {
+                field(&mut lines, "Status",  &s(&d["status"]));
+                field(&mut lines, "Desired", &d["desiredCount"].as_i64().unwrap_or(0).to_string());
+                field(&mut lines, "Running", &d["runningCount"].as_i64().unwrap_or(0).to_string());
+                field(&mut lines, "Updated", &s(&d["updatedAt"]));
+                lines.push(String::new());
+            }
+        }
+    }
+
+    if let Some(tags) = svc["tags"].as_array() {
+        if !tags.is_empty() {
+            section(&mut lines, "Tags");
+            for tag in tags {
+                lines.push(format!("  {:<24}{}", s(&tag["key"]), s(&tag["value"])));
+            }
+            lines.push(String::new());
+        }
+    }
+
+    lines
+}
+
+fn format_task_human(json: &str, only_container: Option<&str>) -> Vec<String> {
+    let root: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => return vec![format!("  Parse error: {}", e)],
+    };
+    let task = match root["tasks"].as_array().and_then(|a| a.first()) {
+        Some(v) => v.clone(),
+        None => return vec!["  No task data found.".to_string()],
+    };
+    let mut lines: Vec<String> = Vec::new();
+
+    let task_id = task["taskArn"].as_str()
+        .and_then(|a| a.split('/').last()).unwrap_or("-");
+
+    if only_container.is_none() {
+        // Full task view
+        section(&mut lines, "Identity");
+        field(&mut lines, "Task ID",        task_id);
+        field(&mut lines, "Status",         &s(&task["lastStatus"]));
+        field(&mut lines, "Desired Status", &s(&task["desiredStatus"]));
+        field(&mut lines, "Launch Type",    &s(&task["launchType"]));
+        field(&mut lines, "Group",          &s(&task["group"]));
+        field(&mut lines, "Platform",       &s(&task["platformVersion"]));
+        lines.push(String::new());
+
+        section(&mut lines, "Resources");
+        field(&mut lines, "CPU",    &s(&task["cpu"]));
+        field(&mut lines, "Memory", &s(&task["memory"]));
+        lines.push(String::new());
+
+        section(&mut lines, "Timing");
+        field(&mut lines, "Created At", &s(&task["createdAt"]));
+        field(&mut lines, "Started At", &s(&task["startedAt"]));
+        field(&mut lines, "Pull Start", &s(&task["pullStartedAt"]));
+        field(&mut lines, "Pull Stop",  &s(&task["pullStoppedAt"]));
+        lines.push(String::new());
+
+        // Network (ENI attachment)
+        if let Some(attachments) = task["attachments"].as_array() {
+            for att in attachments {
+                if att["type"].as_str() == Some("ElasticNetworkInterface") {
+                    section(&mut lines, "Network (ENI)");
+                    if let Some(details) = att["details"].as_array() {
+                        for d in details {
+                            if let (Some(name), Some(val)) = (d["name"].as_str(), d["value"].as_str()) {
+                                field(&mut lines, name, val);
+                            }
+                        }
+                    }
+                    lines.push(String::new());
+                }
+            }
+        }
+    }
+
+    // Containers section (all containers, or just the selected one)
+    if let Some(containers) = task["containers"].as_array() {
+        let to_show: Vec<&serde_json::Value> = if let Some(name) = only_container {
+            containers.iter().filter(|c| c["name"].as_str() == Some(name)).collect()
+        } else {
+            containers.iter().collect()
+        };
+
+        for c in to_show {
+            let cname = s(&c["name"]);
+            section(&mut lines, &format!("Container: {}", cname));
+            field(&mut lines, "Status",  &s(&c["lastStatus"]));
+            field(&mut lines, "Image",   &s(&c["image"]));
+            field(&mut lines, "CPU",     &s(&c["cpu"]));
+            field(&mut lines, "Memory",  &s(&c["memory"]));
+            if let Some(exit_code) = c["exitCode"].as_i64() {
+                field(&mut lines, "Exit Code", &exit_code.to_string());
+            }
+            if let Some(reason) = c["reason"].as_str() {
+                if !reason.is_empty() {
+                    field(&mut lines, "Reason", reason);
+                }
+            }
+            field(&mut lines, "Health",  &s(&c["healthStatus"]));
+            // Network interfaces
+            if let Some(ifaces) = c["networkInterfaces"].as_array() {
+                for iface in ifaces {
+                    field(&mut lines, "Private IP",  &s(&iface["privateIpv4Address"]));
+                    field(&mut lines, "IPv6",        &s(&iface["ipv6Address"]));
+                }
+            }
+            // Port mappings
+            if let Some(bindings) = c["networkBindings"].as_array() {
+                for b in bindings {
+                    field(&mut lines, "Port Binding",
+                        &format!("{}:{} ({})", s(&b["hostPort"]), s(&b["containerPort"]), s(&b["protocol"])));
+                }
+            }
+            lines.push(String::new());
+        }
+    }
+
+    lines
 }

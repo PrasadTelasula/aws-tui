@@ -253,6 +253,13 @@ fn draw_ecs_body(f: &mut Frame, area: Rect, app: &App) {
     if cs.region_dropdown_open {
         draw_region_dropdown(f, area, app);
     }
+
+    // Info popup (i key)
+    if cs.show_info_popup {
+        if let Some(ref popup) = cs.info_popup {
+            draw_info_popup(f, area, popup, TEAL, app.spinner());
+        }
+    }
 }
 
 fn build_ecs_tree_item(

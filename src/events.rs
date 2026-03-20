@@ -294,6 +294,88 @@ pub async fn handle_key_event(
         return None;
     }
 
+    // ── ECS info popup ──────────────────────────────────────────────
+    if app.containers_state.show_info_popup
+        && app.active_tab == AppTab::Containers
+        && app.input_mode == InputMode::Normal
+    {
+        if let Some(ref mut p) = app.containers_state.info_popup {
+            if p.search_active {
+                match key.code {
+                    KeyCode::Esc => {
+                        p.search_active = false;
+                        p.search_query.clear();
+                        p.update_search();
+                    }
+                    KeyCode::Enter => { p.search_active = false; }
+                    KeyCode::Backspace => {
+                        p.search_query.pop();
+                        p.update_search();
+                    }
+                    KeyCode::Char(c) => {
+                        p.search_query.push(c);
+                        p.update_search();
+                    }
+                    _ => {}
+                }
+                return None;
+            }
+        }
+
+        match key.code {
+            KeyCode::Esc => {
+                if let Some(ref mut p) = app.containers_state.info_popup {
+                    if !p.search_query.is_empty() {
+                        p.search_query.clear();
+                        p.update_search();
+                    } else {
+                        app.containers_state.show_info_popup = false;
+                    }
+                } else {
+                    app.containers_state.show_info_popup = false;
+                }
+            }
+            KeyCode::Char('q') => { app.containers_state.show_info_popup = false; }
+            KeyCode::Char('/') => {
+                if let Some(ref mut p) = app.containers_state.info_popup {
+                    p.search_active = true;
+                    p.search_query.clear();
+                    p.update_search();
+                }
+            }
+            KeyCode::Char('n') => {
+                if let Some(ref mut p) = app.containers_state.info_popup { p.next_match(); }
+            }
+            KeyCode::Char('N') => {
+                if let Some(ref mut p) = app.containers_state.info_popup { p.prev_match(); }
+            }
+            KeyCode::Tab => {
+                if let Some(ref mut p) = app.containers_state.info_popup {
+                    p.tab = match p.tab {
+                        instances::InfoTab::Human => instances::InfoTab::Json,
+                        instances::InfoTab::Json  => instances::InfoTab::Human,
+                    };
+                    p.scroll = 0;
+                    p.update_search();
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(ref mut p) = app.containers_state.info_popup { p.scroll_down(1); }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(ref mut p) = app.containers_state.info_popup { p.scroll_up(1); }
+            }
+            KeyCode::PageDown => {
+                if let Some(ref mut p) = app.containers_state.info_popup { p.scroll_down(10); }
+            }
+            KeyCode::PageUp => {
+                if let Some(ref mut p) = app.containers_state.info_popup { p.scroll_up(10); }
+            }
+            _ => {}
+        }
+        return None;
+    }
+
     // ── ECS tree search mode ─────────────────────────────────────────
     if app.containers_state.ecs_search_active
         && app.active_tab == AppTab::Containers
@@ -642,6 +724,15 @@ pub async fn handle_key_event(
         {
             app.containers_state.ecs_search_query.clear();
             app.containers_state.update_ecs_search();
+        }
+        KeyCode::Char('i')
+            if app.active_tab == AppTab::Containers
+                && app.containers_state.sub_tab == ContainersSubTab::Ecs
+                && app.containers_state.focus == ContainersFocus::ClusterList =>
+        {
+            if !app.containers_state.ecs_tree.is_empty() {
+                app.containers_state.fetch_ecs_info();
+            }
         }
         KeyCode::Char('r') if app.active_tab == AppTab::Containers => {
             app.containers_state.fetch_clusters();

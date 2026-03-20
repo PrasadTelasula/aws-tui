@@ -210,7 +210,7 @@ fn draw_ecs_body(f: &mut Frame, area: Rect, app: &App) {
             Span::styled(format!("  {} match{}  Esc clear", match_count, if match_count == 1 { "" } else { "es" }), Style::default().fg(FG4)),
         ]
     } else {
-        vec![Span::styled("   / to search", Style::default().fg(FG4))]
+        vec![Span::styled("   / to search", Style::default().fg(FG3))]
     };
     f.render_widget(Paragraph::new(Line::from(search_spans)), left_rows[2]);
 
@@ -223,12 +223,12 @@ fn draw_ecs_body(f: &mut Frame, area: Rect, app: &App) {
     if cs.ecs_tree.is_empty() && !cs.loading_ecs_clusters {
         items.push(ListItem::new(Line::from(Span::styled(
             "  no clusters  (press r)",
-            Style::default().fg(FG4),
+            Style::default().fg(FG3),
         ))));
     } else if searching && cs.ecs_filtered_indices.is_empty() {
         items.push(ListItem::new(Line::from(Span::styled(
             "  no matches",
-            Style::default().fg(FG4),
+            Style::default().fg(FG3),
         ))));
     } else {
         let visible: Vec<usize> = if searching {
@@ -282,17 +282,11 @@ fn build_ecs_tree_item(
         Span::styled(" ", Style::default())
     };
 
-    // Name style: bright when selected, dimmer otherwise; highlight matches
-    let name_color = if selected {
-        FG
-    } else if highlight_match && item.name.to_lowercase().contains(&query.to_lowercase()) {
+    // Name style: bright always, highlight matches in teal, bold when selected
+    let name_color = if highlight_match && item.name.to_lowercase().contains(&query.to_lowercase()) {
         TEAL
     } else {
-        match item.depth {
-            0 => FG2,
-            1 => FG2,
-            _ => FG3,
-        }
+        FG
     };
     let name_style = if selected {
         Style::default().fg(name_color).add_modifier(Modifier::BOLD)
@@ -309,13 +303,13 @@ fn build_ecs_tree_item(
             } else if item.expanded {
                 ("▼ ", FG2)
             } else {
-                ("▶ ", FG4)
+                ("▶ ", FG3)
             };
             spans.push(Span::styled(arrow, Style::default().fg(arrow_color)));
             spans.push(Span::styled(format!("{} ", ICON_LAYERS), Style::default().fg(BLUE)));
             spans.push(Span::styled(item.name.clone(), name_style));
             if !item.extra.is_empty() {
-                spans.push(Span::styled(format!("  {}", item.extra), Style::default().fg(FG3)));
+                spans.push(Span::styled(format!("  {}", item.extra), Style::default().fg(FG2)));
             }
             if item.count_b > 0 {
                 spans.push(Span::styled(format!("  {} pend", item.count_b), Style::default().fg(AMBER)));
@@ -331,7 +325,7 @@ fn build_ecs_tree_item(
             } else if item.expanded {
                 ("▼ ", FG2)
             } else {
-                ("▶ ", FG4)
+                ("▶ ", FG3)
             };
             spans.push(Span::styled(arrow, Style::default().fg(arrow_color)));
             spans.push(Span::styled(format!("{} ", ICON_COG2), Style::default().fg(TEAL)));
@@ -369,17 +363,16 @@ fn build_ecs_tree_item(
             ));
         }
         EcsTreeItemKind::Container => {
-            spans.push(Span::styled("└ ", Style::default().fg(FG4)));
+            spans.push(Span::styled("└ ", Style::default().fg(FG3)));
             spans.push(Span::styled(item.name.clone(), name_style));
             spans.push(Span::styled(
                 format!("  {}", item.status),
                 Style::default().fg(status_color(&item.status)),
             ));
             if !item.extra.is_empty() {
-                // short image tag
                 let img = item.extra.split('/').last().unwrap_or(&item.extra);
                 let img = if img.len() > 25 { &img[..25] } else { img };
-                spans.push(Span::styled(format!("  {}", img), Style::default().fg(FG4)));
+                spans.push(Span::styled(format!("  {}", img), Style::default().fg(FG2)));
             }
         }
     }
@@ -409,7 +402,7 @@ fn draw_ecs_detail_panel(f: &mut Frame, area: Rect, app: &App) {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "  Press r to load clusters",
-                Style::default().fg(FG4),
+                Style::default().fg(FG3),
             ))),
             area,
         );
@@ -431,7 +424,7 @@ fn draw_ecs_detail_panel(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(header_text, Style::default().fg(header_color).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("  {}", item.name), Style::default().fg(FG2)),
+            Span::styled(format!("  {}", item.name), Style::default().fg(FG)),
         ])),
         rows[0],
     );
@@ -450,7 +443,7 @@ fn draw_ecs_detail_panel(f: &mut Frame, area: Rect, app: &App) {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "  Enter/→ expand services  ←/Esc collapse",
-                Style::default().fg(FG4),
+                Style::default().fg(FG3),
             )));
         }
         EcsTreeItemKind::Service => {
@@ -462,35 +455,35 @@ fn draw_ecs_detail_panel(f: &mut Frame, area: Rect, app: &App) {
                 count_color,
             ));
             if !item.extra.is_empty() {
-                lines.push(detail_line("Task Def", &item.extra, FG2));
+                lines.push(detail_line("Task Def", &item.extra, FG));
             }
-            lines.push(detail_line("Cluster", &item.cluster_name, FG3));
+            lines.push(detail_line("Cluster", &item.cluster_name, FG2));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "  Enter/→ expand tasks  ←/Esc collapse",
-                Style::default().fg(FG4),
+                Style::default().fg(FG3),
             )));
         }
         EcsTreeItemKind::Task => {
-            lines.push(detail_line("Task ID", &item.name, FG2));
+            lines.push(detail_line("Task ID", &item.name, FG));
             lines.push(detail_line("Status", &item.status, status_color(&item.status)));
             if !item.launch_type.is_empty() {
                 let lt_color = if item.launch_type == "FARGATE" { BLUE } else { MAUVE };
                 lines.push(detail_line("Launch Type", &item.launch_type, lt_color));
             }
             if !item.extra.is_empty() {
-                lines.push(detail_line("Task Def", &item.extra, FG2));
+                lines.push(detail_line("Task Def", &item.extra, FG));
             }
-            lines.push(detail_line("Cluster", &item.cluster_name, FG3));
-            lines.push(detail_line("Service", &item.service_name, FG3));
+            lines.push(detail_line("Cluster", &item.cluster_name, FG2));
+            lines.push(detail_line("Service", &item.service_name, FG2));
         }
         EcsTreeItemKind::Container => {
             lines.push(detail_line("Status", &item.status, status_color(&item.status)));
             if !item.extra.is_empty() {
-                lines.push(detail_line("Image", &item.extra, FG2));
+                lines.push(detail_line("Image", &item.extra, FG));
             }
-            lines.push(detail_line("Service", &item.service_name, FG3));
-            lines.push(detail_line("Cluster", &item.cluster_name, FG3));
+            lines.push(detail_line("Service", &item.service_name, FG2));
+            lines.push(detail_line("Cluster", &item.cluster_name, FG2));
         }
     }
     f.render_widget(Paragraph::new(lines), rows[1]);
@@ -498,7 +491,7 @@ fn draw_ecs_detail_panel(f: &mut Frame, area: Rect, app: &App) {
 
 fn detail_line(label: &str, value: &str, value_color: Color) -> Line<'static> {
     Line::from(vec![
-        Span::styled(format!("  {:<12}", label), Style::default().fg(FG3)),
+        Span::styled(format!("  {:<12}", label), Style::default().fg(FG2)),
         Span::styled(value.to_string(), Style::default().fg(value_color)),
     ])
 }

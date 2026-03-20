@@ -314,6 +314,14 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
                     spans.push(key_span("r"));
                     spans.push(desc_span(" refresh  "));
                 }
+                ContainersFocus::EcsTerminal => {
+                    spans.push(key_span("Enter/e"));
+                    spans.push(desc_span(" focus terminal  "));
+                    spans.push(key_span("Ctrl+D"));
+                    spans.push(desc_span(" close  "));
+                    spans.push(key_span("Tab"));
+                    spans.push(desc_span(" nav  "));
+                }
             }
         }
         AppTab::Terminal => {

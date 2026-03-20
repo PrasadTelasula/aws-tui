@@ -17,6 +17,7 @@ pub enum ContainersFocus {
     SubTabBar,
     ClusterList,
     DetailList,
+    EcsTerminal,
 }
 
 // ─── ECS tree types ───────────────────────────────────────────────────────────
@@ -79,6 +80,23 @@ pub struct EcsContainerData {
     pub name: String,
     pub image: String,
     pub status: String,
+}
+
+// ─── ECS exec session ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum EcsExecStatus {
+    Disconnected,
+    Connected,
+}
+
+pub struct EcsExecSession {
+    pub label: String,
+    pub parser: vt100::Parser,
+    pub status: EcsExecStatus,
+    writer: Box<dyn std::io::Write + Send>,
+    master: Box<dyn portable_pty::MasterPty + Send>,
+    bytes_rx: mpsc::UnboundedReceiver<Vec<u8>>,
 }
 
 // ─── EKS data types ───────────────────────────────────────────────────────────
@@ -149,6 +167,12 @@ pub struct ContainersState {
 
     pub last_error: Option<String>,
 
+    // ECS exec sessions (embedded PTY terminal, right panel)
+    pub ecs_exec_sessions: Vec<EcsExecSession>,
+    pub active_exec_idx: usize,
+    pub exec_pty_size: (u16, u16),
+    pub exec_last_error: Option<String>,
+
     fetch_tx: UnboundedSender<FetchResult>,
     pub fetch_rx: UnboundedReceiver<FetchResult>,
 }
@@ -180,6 +204,10 @@ impl ContainersState {
             show_info_popup: false,
             info_popup: None,
             last_error: None,
+            ecs_exec_sessions: Vec::new(),
+            active_exec_idx: 0,
+            exec_pty_size: (24, 80),
+            exec_last_error: None,
             fetch_tx,
             fetch_rx,
         }
@@ -408,9 +436,16 @@ impl ContainersState {
             ContainersFocus::RegionList  => ContainersFocus::SubTabBar,
             ContainersFocus::SubTabBar   => ContainersFocus::ClusterList,
             ContainersFocus::ClusterList => match self.sub_tab {
-                ContainersSubTab::Ecs => ContainersFocus::RegionList,
+                ContainersSubTab::Ecs => {
+                    if !self.ecs_exec_sessions.is_empty() {
+                        ContainersFocus::EcsTerminal
+                    } else {
+                        ContainersFocus::RegionList
+                    }
+                }
                 ContainersSubTab::Eks => ContainersFocus::DetailList,
             },
+            ContainersFocus::EcsTerminal => ContainersFocus::RegionList,
             ContainersFocus::DetailList  => ContainersFocus::RegionList,
         };
     }
@@ -420,9 +455,9 @@ impl ContainersState {
             ContainersSubTab::Ecs => ContainersSubTab::Eks,
             ContainersSubTab::Eks => ContainersSubTab::Ecs,
         };
-        // If we were on DetailList (EKS), snap back to ClusterList for ECS
+        // If we were on DetailList (EKS) or EcsTerminal, snap back to ClusterList
         if self.sub_tab == ContainersSubTab::Ecs
-            && self.focus == ContainersFocus::DetailList
+            && matches!(self.focus, ContainersFocus::DetailList | ContainersFocus::EcsTerminal)
         {
             self.focus = ContainersFocus::ClusterList;
         }
@@ -431,6 +466,16 @@ impl ContainersState {
     // ── Tick — drain async results ────────────────────────────────────
 
     pub fn tick(&mut self) {
+        for session in &mut self.ecs_exec_sessions {
+            while let Ok(bytes) = session.bytes_rx.try_recv() {
+                if bytes.is_empty() {
+                    session.status = EcsExecStatus::Disconnected;
+                } else {
+                    session.parser.process(&bytes);
+                }
+            }
+        }
+
         while let Ok(result) = self.fetch_rx.try_recv() {
             match result {
                 FetchResult::EcsClusters(clusters) => {
@@ -968,37 +1013,166 @@ impl ContainersState {
         });
     }
 
-    // ── ECS exec-command ──────────────────────────────────────────────
+    // ── ECS exec sessions (embedded PTY) ─────────────────────────────
 
-    /// Build the `aws ecs execute-command` invocation for the selected tree
-    /// item. Returns `None` if the item is not a Task or Container, or if
-    /// no profile/region are set.
-    pub fn build_exec_command(&self) -> Option<String> {
-        let item = self.ecs_tree.get(self.selected_ecs_tree)?;
-        let profile = self.active_profile()?;
-        let region = self.active_region();
+    pub fn active_exec_session(&self) -> Option<&EcsExecSession> {
+        self.ecs_exec_sessions.get(self.active_exec_idx)
+    }
 
-        match item.kind {
+    pub fn next_exec_session(&mut self) {
+        if self.ecs_exec_sessions.len() > 1 {
+            self.active_exec_idx = (self.active_exec_idx + 1) % self.ecs_exec_sessions.len();
+        }
+    }
+
+    pub fn prev_exec_session(&mut self) {
+        if self.ecs_exec_sessions.len() > 1 {
+            self.active_exec_idx = if self.active_exec_idx == 0 {
+                self.ecs_exec_sessions.len() - 1
+            } else {
+                self.active_exec_idx - 1
+            };
+        }
+    }
+
+    pub fn disconnect_ecs_exec(&mut self) {
+        if self.ecs_exec_sessions.is_empty() { return; }
+        self.ecs_exec_sessions.remove(self.active_exec_idx);
+        if !self.ecs_exec_sessions.is_empty() && self.active_exec_idx >= self.ecs_exec_sessions.len() {
+            self.active_exec_idx = self.ecs_exec_sessions.len() - 1;
+        }
+    }
+
+    pub fn write_exec_input(&mut self, bytes: &[u8]) {
+        if let Some(session) = self.ecs_exec_sessions.get_mut(self.active_exec_idx) {
+            if session.status == EcsExecStatus::Connected {
+                let _ = std::io::Write::write_all(&mut session.writer, bytes);
+                let _ = std::io::Write::flush(&mut session.writer);
+            }
+        }
+    }
+
+    pub fn resize_exec_pty(&mut self, rows: u16, cols: u16) {
+        if self.exec_pty_size == (rows, cols) { return; }
+        self.exec_pty_size = (rows, cols);
+        for session in &mut self.ecs_exec_sessions {
+            let _ = session.master.resize(portable_pty::PtySize {
+                rows, cols, pixel_width: 0, pixel_height: 0,
+            });
+            session.parser.set_size(rows, cols);
+        }
+    }
+
+    /// Spawn an embedded PTY exec session for the selected Task or Container.
+    pub fn connect_ecs_exec(&mut self, rows: u16, cols: u16) {
+        let item = match self.ecs_tree.get(self.selected_ecs_tree) {
+            Some(i) => i.clone(),
+            None => return,
+        };
+        let profile = match self.active_profile() {
+            Some(p) => p.to_string(),
+            None => return,
+        };
+        let region = self.active_region().to_string();
+
+        let (cluster, task_id, container_opt, label) = match item.kind {
             EcsTreeItemKind::Container => {
-                // Walk backward to find the parent Task item
                 let task_id = self.ecs_tree[..self.selected_ecs_tree]
                     .iter()
                     .rev()
                     .find(|i| i.kind == EcsTreeItemKind::Task)
-                    .map(|i| i.name.clone())?;
-                Some(format!(
-                    "aws ecs execute-command --cluster {} --task {} --container {} --interactive --command /bin/sh --region {} --profile {}",
-                    item.cluster_name, task_id, item.name, region, profile
-                ))
+                    .map(|i| i.name.clone());
+                match task_id {
+                    Some(tid) => {
+                        let short = &tid[tid.len().saturating_sub(8)..];
+                        let label = format!("{} @ {}", item.name, short);
+                        (item.cluster_name.clone(), tid, Some(item.name.clone()), label)
+                    }
+                    None => return,
+                }
             }
             EcsTreeItemKind::Task => {
-                Some(format!(
-                    "aws ecs execute-command --cluster {} --task {} --interactive --command /bin/sh --region {} --profile {}",
-                    item.cluster_name, item.name, region, profile
-                ))
+                let short = &item.name[item.name.len().saturating_sub(8)..];
+                let label = format!("task @ {}", short);
+                (item.cluster_name.clone(), item.name.clone(), None, label)
             }
-            _ => None,
+            _ => return,
+        };
+
+        // Already have a session for this label — just switch focus.
+        if let Some(idx) = self.ecs_exec_sessions.iter().position(|s| s.label == label) {
+            self.active_exec_idx = idx;
+            self.exec_last_error = None;
+            self.focus = ContainersFocus::EcsTerminal;
+            return;
         }
+
+        let pty_system = portable_pty::native_pty_system();
+        let pair = match pty_system.openpty(portable_pty::PtySize {
+            rows, cols, pixel_width: 0, pixel_height: 0,
+        }) {
+            Ok(p) => p,
+            Err(e) => { self.exec_last_error = Some(e.to_string()); return; }
+        };
+
+        let mut cmd = portable_pty::CommandBuilder::new("aws");
+        cmd.args(["ecs", "execute-command",
+            "--cluster", &cluster,
+            "--task", &task_id,
+            "--interactive",
+            "--command", "/bin/sh",
+            "--region", &region,
+            "--profile", &profile,
+        ]);
+        if let Some(ref c) = container_opt {
+            cmd.args(["--container", c.as_str()]);
+        }
+
+        let child = match pair.slave.spawn_command(cmd) {
+            Ok(c) => c,
+            Err(e) => { self.exec_last_error = Some(e.to_string()); return; }
+        };
+
+        let writer = match pair.master.take_writer() {
+            Ok(w) => w,
+            Err(e) => { self.exec_last_error = Some(e.to_string()); return; }
+        };
+
+        let reader = match pair.master.try_clone_reader() {
+            Ok(r) => r,
+            Err(e) => { self.exec_last_error = Some(e.to_string()); return; }
+        };
+
+        let (bytes_tx, bytes_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            let mut reader = reader;
+            loop {
+                match std::io::Read::read(&mut reader, &mut buf) {
+                    Ok(0) | Err(_) => {
+                        let _ = bytes_tx.send(vec![]);
+                        break;
+                    }
+                    Ok(n) => {
+                        let _ = bytes_tx.send(buf[..n].to_vec());
+                    }
+                }
+            }
+            drop(child);
+        });
+
+        self.ecs_exec_sessions.push(EcsExecSession {
+            label,
+            parser: vt100::Parser::new(rows, cols, 1000),
+            status: EcsExecStatus::Connected,
+            writer,
+            master: pair.master,
+            bytes_rx,
+        });
+        self.active_exec_idx = self.ecs_exec_sessions.len() - 1;
+        self.exec_pty_size = (rows, cols);
+        self.exec_last_error = None;
+        self.focus = ContainersFocus::EcsTerminal;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────

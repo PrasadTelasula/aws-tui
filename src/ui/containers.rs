@@ -1,6 +1,6 @@
 use super::*;
 use crate::app::App;
-use crate::containers::{ContainersFocus, ContainersSubTab, EcsTreeItemKind};
+use crate::containers::{ContainersFocus, ContainersSubTab, EcsExecStatus, EcsTreeItemKind};
 
 fn draw_region_row(f: &mut Frame, area: Rect, app: &App) {
     let cs = &app.containers_state;
@@ -162,7 +162,13 @@ fn draw_ecs_body(f: &mut Frame, area: Rect, app: &App) {
     let div_area  = Rect::new(area.x + left_w,     area.y, 1,       area.height);
     let right_area= Rect::new(area.x + left_w + 1, area.y, right_w, area.height);
 
-    let div_color = if matches!(cs.focus, ContainersFocus::RegionList | ContainersFocus::SubTabBar | ContainersFocus::ClusterList) { BLUE } else { FG4 };
+    let div_color = if matches!(cs.focus, ContainersFocus::RegionList | ContainersFocus::SubTabBar | ContainersFocus::ClusterList) {
+        BLUE
+    } else if cs.focus == ContainersFocus::EcsTerminal {
+        TEAL
+    } else {
+        FG4
+    };
     let div_lines: Vec<Line> = (0..div_area.height)
         .map(|_| Line::from(Span::styled("│", Style::default().fg(div_color))))
         .collect();
@@ -246,8 +252,12 @@ fn draw_ecs_body(f: &mut Frame, area: Rect, app: &App) {
     }
     f.render_widget(List::new(items), left_rows[3]);
 
-    // ── Right: detail panel ───────────────────────────────────────────
-    draw_ecs_detail_panel(f, right_area, app);
+    // ── Right: exec terminal or detail panel ──────────────────────────
+    if !cs.ecs_exec_sessions.is_empty() {
+        draw_ecs_exec_terminal(f, right_area, app);
+    } else {
+        draw_ecs_detail_panel(f, right_area, app);
+    }
 
     // Region dropdown
     if cs.region_dropdown_open {
@@ -389,6 +399,137 @@ fn build_ecs_tree_item(
         list_item = list_item.style(Style::default().bg(BG_HL));
     }
     list_item
+}
+
+fn draw_ecs_exec_terminal(f: &mut Frame, area: Rect, app: &App) {
+    let cs = &app.containers_state;
+    let has_sessions = !cs.ecs_exec_sessions.is_empty();
+
+    let right_split = if has_sessions {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(3), Constraint::Length(1)])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(3), Constraint::Length(1)])
+            .split(area)
+    };
+
+    let (term_area, status_area) = if has_sessions {
+        let tab_area    = right_split[0];
+        let term_area   = right_split[1];
+        let status_area = right_split[2];
+
+        let mut spans: Vec<Span> = Vec::new();
+        for (i, session) in cs.ecs_exec_sessions.iter().enumerate() {
+            let active = i == cs.active_exec_idx;
+            let label: String = session.label.chars().take(20).collect();
+            let dot = if session.status == EcsExecStatus::Connected { "● " } else { "○ " };
+            let dot_color = if session.status == EcsExecStatus::Connected { GREEN } else { FG3 };
+            if active {
+                spans.push(Span::styled(dot, Style::default().fg(dot_color).bg(BG_HL)));
+                spans.push(Span::styled(format!(" {} ", label), Style::default().fg(FG).bg(BG_HL).add_modifier(Modifier::BOLD)));
+            } else {
+                spans.push(Span::styled(dot, Style::default().fg(dot_color).bg(BG_BAR)));
+                spans.push(Span::styled(format!(" {} ", label), Style::default().fg(FG2).bg(BG_BAR)));
+            }
+            spans.push(Span::styled("│", Style::default().fg(FG4).bg(BG_BAR)));
+        }
+        f.render_widget(
+            Paragraph::new(Line::from(spans)).style(Style::default().bg(BG_BAR)),
+            tab_area,
+        );
+        (term_area, status_area)
+    } else {
+        (right_split[0], right_split[1])
+    };
+
+    if let Some(session) = cs.active_exec_session() {
+        let screen = session.parser.screen();
+        let (screen_rows, screen_cols) = screen.size();
+
+        let mut lines: Vec<Line> = Vec::new();
+        for row in 0..screen_rows {
+            let mut spans: Vec<Span> = Vec::new();
+            let mut cur_text = String::new();
+            let mut cur_style = Style::default();
+
+            for col in 0..screen_cols {
+                let (ch, style) = if let Some(cell) = screen.cell(row, col) {
+                    let content = cell.contents();
+                    let ch = if content.is_empty() { " ".to_string() } else { content.to_string() };
+                    let fg = vt100_color(cell.fgcolor());
+                    let bg = vt100_color(cell.bgcolor());
+                    let mut s = Style::default().fg(fg).bg(bg);
+                    if cell.bold()      { s = s.add_modifier(Modifier::BOLD); }
+                    if cell.italic()    { s = s.add_modifier(Modifier::ITALIC); }
+                    if cell.underline() { s = s.add_modifier(Modifier::UNDERLINED); }
+                    (ch, s)
+                } else {
+                    (" ".to_string(), Style::default())
+                };
+
+                if style == cur_style {
+                    cur_text.push_str(&ch);
+                } else {
+                    if !cur_text.is_empty() {
+                        spans.push(Span::styled(cur_text.clone(), cur_style));
+                        cur_text.clear();
+                    }
+                    cur_text = ch;
+                    cur_style = style;
+                }
+            }
+            if !cur_text.is_empty() {
+                spans.push(Span::styled(cur_text, cur_style));
+            }
+            lines.push(Line::from(spans));
+        }
+
+        f.render_widget(Paragraph::new(lines), term_area);
+
+        let (crow, ccol) = screen.cursor_position();
+        let cx = term_area.x + ccol as u16;
+        let cy = term_area.y + crow as u16;
+        if cx < term_area.x + term_area.width && cy < term_area.y + term_area.height {
+            f.set_cursor_position((cx, cy));
+        }
+    } else if let Some(ref err) = cs.exec_last_error {
+        let max_w = area.width.saturating_sub(4).min(72);
+        let inner_w = max_w.saturating_sub(2);
+        let line_count = err.chars().count() as u16 / inner_w.max(1) + 1;
+        let box_h = (line_count + 2 + 1).min(area.height.saturating_sub(2));
+        let bx = area.x + (area.width.saturating_sub(max_w)) / 2;
+        let by = area.y + (area.height.saturating_sub(box_h)) / 2;
+        let err_area = Rect::new(bx, by, max_w, box_h);
+        f.render_widget(Clear, err_area);
+        f.render_widget(
+            Paragraph::new(Span::styled(err.as_str(), Style::default().fg(RED)))
+                .wrap(Wrap { trim: false })
+                .block(
+                    Block::default()
+                        .title(Span::styled(" ✕ Exec Error ", Style::default().fg(RED)))
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
+                        .border_style(Style::default().fg(RED))
+                        .style(Style::default().bg(BG_BAR)),
+                ),
+            err_area,
+        );
+    }
+
+    let status_label = if cs.ecs_exec_sessions.len() > 1 {
+        "  F4/F5: switch  Enter/e: focus  Ctrl+D: close  Tab: nav"
+    } else {
+        "  Enter/e: focus terminal  Ctrl+D: close  Tab: nav"
+    };
+    f.render_widget(
+        Paragraph::new(Span::styled(status_label, Style::default().fg(FG3)))
+            .style(Style::default().bg(BG_BAR)),
+        status_area,
+    );
 }
 
 fn draw_ecs_detail_panel(f: &mut Frame, area: Rect, app: &App) {

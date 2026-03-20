@@ -32,6 +32,7 @@ pub enum InputMode {
     Search,
     TerminalInput,
     SsmInput,
+    EcsExecInput,
 }
 
 #[derive(Debug, Clone, PartialEq)]

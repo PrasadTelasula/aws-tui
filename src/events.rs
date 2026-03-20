@@ -454,6 +454,31 @@ pub async fn handle_key_event(
         return None;
     }
 
+    // ── ECS Exec Input mode ─────────────────────────────────────────
+    if app.input_mode == InputMode::EcsExecInput {
+        match key.code {
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.containers_state.disconnect_ecs_exec();
+                if app.containers_state.ecs_exec_sessions.is_empty() {
+                    app.input_mode = InputMode::Normal;
+                    app.containers_state.focus = ContainersFocus::ClusterList;
+                }
+            }
+            KeyCode::F(4) => { app.containers_state.prev_exec_session(); }
+            KeyCode::F(5) => { app.containers_state.next_exec_session(); }
+            KeyCode::Tab => {
+                app.input_mode = InputMode::Normal;
+                app.containers_state.cycle_focus();
+            }
+            _ => {
+                if let Some(bytes) = key_to_pty_bytes(key) {
+                    app.containers_state.write_exec_input(&bytes);
+                }
+            }
+        }
+        return None;
+    }
+
     // ── Normal mode ─────────────────────────────────────────────────
     match key.code {
         KeyCode::Char('q') => {
@@ -634,6 +659,7 @@ pub async fn handle_key_event(
                     ContainersFocus::SubTabBar   => {}
                     ContainersFocus::ClusterList => app.containers_state.prev_cluster(),
                     ContainersFocus::DetailList  => app.containers_state.prev_detail(),
+                    ContainersFocus::EcsTerminal => {}
                 }
             }
         }
@@ -646,6 +672,7 @@ pub async fn handle_key_event(
                     ContainersFocus::SubTabBar   => {}
                     ContainersFocus::ClusterList => app.containers_state.next_cluster(),
                     ContainersFocus::DetailList  => app.containers_state.next_detail(),
+                    ContainersFocus::EcsTerminal => {}
                 }
             }
         }
@@ -694,6 +721,9 @@ pub async fn handle_key_event(
                         }
                     }
                     ContainersFocus::DetailList  => {}
+                    ContainersFocus::EcsTerminal => {
+                        app.input_mode = InputMode::EcsExecInput;
+                    }
                 }
             }
         }
@@ -739,9 +769,22 @@ pub async fn handle_key_event(
                 && app.containers_state.sub_tab == ContainersSubTab::Ecs
                 && app.containers_state.focus == ContainersFocus::ClusterList =>
         {
-            if let Some(cmd) = app.containers_state.build_exec_command() {
-                return Some(cmd);
+            let rows = terminal_size.height.saturating_sub(9);
+            let inner_w  = terminal_size.width.saturating_sub(2);
+            let left_w   = (inner_w * 36) / 100;
+            let cols = inner_w.saturating_sub(left_w + 1);
+            app.containers_state.connect_ecs_exec(rows.max(10), cols.max(20));
+            if app.containers_state.focus == ContainersFocus::EcsTerminal {
+                app.input_mode = InputMode::EcsExecInput;
             }
+        }
+        KeyCode::Char('e')
+            if app.active_tab == AppTab::Containers
+                && app.containers_state.sub_tab == ContainersSubTab::Ecs
+                && app.containers_state.focus == ContainersFocus::EcsTerminal =>
+        {
+            // 'e' while terminal focused: re-enter EcsExecInput mode
+            app.input_mode = InputMode::EcsExecInput;
         }
         KeyCode::Char('r') if app.active_tab == AppTab::Containers => {
             app.containers_state.fetch_clusters();

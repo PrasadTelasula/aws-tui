@@ -126,15 +126,22 @@ async fn run_app(
 
         terminal.draw(|f| ui::draw(f, app))?;
 
-        // Keep PTY size in sync with the SSM panel dimensions
-        if app.active_tab == AppTab::Instances {
-            if let Ok(size) = terminal.size() {
-                let inner_w  = size.width.saturating_sub(2);
-                let left_w   = (inner_w * 36) / 100;
-                let pty_cols = inner_w.saturating_sub(left_w + 1);
+        // Keep PTY size in sync with panel dimensions
+        if let Ok(size) = terminal.size() {
+            let inner_w  = size.width.saturating_sub(2);
+            let left_w   = (inner_w * 36) / 100;
+            let pty_cols = inner_w.saturating_sub(left_w + 1);
+
+            if app.active_tab == AppTab::Instances {
                 let tab_row: u16 = if app.instances_state.ssm_sessions.is_empty() { 0 } else { 1 };
                 let pty_rows = size.height.saturating_sub(9 + tab_row);
                 app.instances_state.resize_pty(pty_rows.max(4), pty_cols.max(20));
+            }
+
+            if app.active_tab == AppTab::Containers {
+                let tab_row: u16 = if app.containers_state.ecs_exec_sessions.is_empty() { 0 } else { 1 };
+                let pty_rows = size.height.saturating_sub(9 + tab_row);
+                app.containers_state.resize_exec_pty(pty_rows.max(4), pty_cols.max(20));
             }
         }
 

@@ -1,14 +1,16 @@
 mod app;
 mod completer;
+mod containers;
+mod events;
 mod instances;
 mod parser;
 mod session;
 mod terminal;
 mod ui;
 
-use app::{App, AppTab, ConfirmAction, InputMode};
+use app::{App, AppTab, InputMode};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, Event},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -91,10 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     app.stop_all_sessions().await;
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen
-    )?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
     if let Err(err) = result {
@@ -103,41 +102,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
-}
-
-fn key_to_pty_bytes(key: crossterm::event::KeyEvent) -> Option<Vec<u8>> {
-    use crossterm::event::{KeyCode, KeyModifiers};
-    match key.code {
-        KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            match c.to_ascii_lowercase() {
-                'a'..='z' => Some(vec![c.to_ascii_lowercase() as u8 - b'a' + 1]),
-                '[' => Some(vec![27]),
-                '\\' => Some(vec![28]),
-                ']' => Some(vec![29]),
-                _ => None,
-            }
-        }
-        KeyCode::Char(c) => {
-            let mut buf = [0u8; 4];
-            let s = c.encode_utf8(&mut buf);
-            Some(s.as_bytes().to_vec())
-        }
-        KeyCode::Enter => Some(vec![b'\r']),
-        KeyCode::Backspace => Some(vec![127]),
-        KeyCode::Delete => Some(b"\x1b[3~".to_vec()),
-        KeyCode::Esc => Some(vec![27]),
-        KeyCode::Tab => Some(vec![b'\t']),
-        KeyCode::BackTab => Some(b"\x1b[Z".to_vec()),
-        KeyCode::Up => Some(b"\x1b[A".to_vec()),
-        KeyCode::Down => Some(b"\x1b[B".to_vec()),
-        KeyCode::Right => Some(b"\x1b[C".to_vec()),
-        KeyCode::Left => Some(b"\x1b[D".to_vec()),
-        KeyCode::Home => Some(b"\x1b[H".to_vec()),
-        KeyCode::End => Some(b"\x1b[F".to_vec()),
-        KeyCode::PageUp => Some(b"\x1b[5~".to_vec()),
-        KeyCode::PageDown => Some(b"\x1b[6~".to_vec()),
-        _ => None,
-    }
 }
 
 async fn run_app(
@@ -151,7 +115,7 @@ async fn run_app(
         app.refresh_statuses().await;
         app.on_tick();
 
-        // Drive completer (debounced) on active terminal
+        // Drive completer on active terminal tab
         if app.active_tab == AppTab::Terminal && app.input_mode == InputMode::TerminalInput {
             let term = app.terminal_state.active();
             if term.completer.should_query(&term.input) {
@@ -162,13 +126,12 @@ async fn run_app(
 
         terminal.draw(|f| ui::draw(f, app))?;
 
-        // Keep PTY size in sync with the actual SSM panel dimensions
+        // Keep PTY size in sync with the SSM panel dimensions
         if app.active_tab == AppTab::Instances {
             if let Ok(size) = terminal.size() {
-                let inner_w = size.width.saturating_sub(2);
-                let left_w = (inner_w * 36) / 100;
+                let inner_w  = size.width.saturating_sub(2);
+                let left_w   = (inner_w * 36) / 100;
                 let pty_cols = inner_w.saturating_sub(left_w + 1);
-                // Session tab bar adds 1 row when sessions are open
                 let tab_row: u16 = if app.instances_state.ssm_sessions.is_empty() { 0 } else { 1 };
                 let pty_rows = size.height.saturating_sub(9 + tab_row);
                 app.instances_state.resize_pty(pty_rows.max(4), pty_cols.max(20));
@@ -177,561 +140,24 @@ async fn run_app(
 
         if event::poll(tick_rate)? {
             if let Event::Key(key) = event::read()? {
-                // ── Credentials popup ──
-                if app.show_credentials_popup {
-                    if key.code == KeyCode::Char('c') {
-                        app.copy_credentials_to_clipboard();
-                    }
-                    app.show_credentials_popup = false;
-                    continue;
-                }
+                let terminal_size = terminal.size().unwrap_or_default();
+                if let Some(cmd) = events::handle_key_event(app, key, terminal_size).await {
+                    // Interactive SSM shell: suspend TUI, hand terminal to plugin, resume
+                    disable_raw_mode()?;
+                    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+                    terminal.show_cursor()?;
 
-                // ── Confirmation popup ──
-                if app.show_confirm {
-                    match key.code {
-                        KeyCode::Char('y') | KeyCode::Char('Y') => {
-                            let action = app.confirm_action.clone();
-                            app.show_confirm = false;
-                            app.confirm_action = ConfirmAction::None;
-                            match action {
-                                ConfirmAction::StopAll => app.stop_all_sessions().await,
-                                ConfirmAction::Quit => app.should_quit = true,
-                                ConfirmAction::None => {}
-                            }
-                        }
-                        _ => {
-                            app.show_confirm = false;
-                            app.confirm_action = ConfirmAction::None;
-                        }
-                    }
-                    continue;
-                }
+                    let _ = std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(&cmd)
+                        .stdin(std::process::Stdio::inherit())
+                        .stdout(std::process::Stdio::inherit())
+                        .stderr(std::process::Stdio::inherit())
+                        .status();
 
-                // ── Search mode (Sessions tab) ──
-                if app.input_mode == InputMode::Search {
-                    match key.code {
-                        KeyCode::Esc => {
-                            app.input_mode = InputMode::Normal;
-                            app.search_query.clear();
-                            app.filtered_indices.clear();
-                        }
-                        KeyCode::Enter => {
-                            app.input_mode = InputMode::Normal;
-                        }
-                        KeyCode::Backspace => {
-                            app.search_query.pop();
-                            app.update_search();
-                        }
-                        KeyCode::Char(c) => {
-                            app.search_query.push(c);
-                            app.update_search();
-                        }
-                        _ => {}
-                    }
-                    continue;
-                }
-
-                // ── Global: F1/F2 tab switching (works in ANY mode) ──
-                match key.code {
-                    KeyCode::F(1) => {
-                        app.active_tab = AppTab::Sessions;
-                        app.input_mode = InputMode::Normal;
-                        continue;
-                    }
-                    KeyCode::F(2) => {
-                        app.active_tab = AppTab::Terminal;
-                        app.input_mode = InputMode::TerminalInput;
-                        continue;
-                    }
-                    KeyCode::F(3) => {
-                        app.active_tab = AppTab::Instances;
-                        app.input_mode = InputMode::Normal;
-                        // Auto-fetch instances if we have a profile and none loaded
-                        if !app.instances_state.profiles.is_empty()
-                            && app.instances_state.instances.is_empty()
-                            && !app.instances_state.loading_instances
-                        {
-                            app.instances_state.fetch_instances();
-                        }
-                        continue;
-                    }
-                    _ => {}
-                }
-
-                // ── Terminal input mode ──
-                if app.input_mode == InputMode::TerminalInput {
-                    // Ctrl+H / Ctrl+L: switch terminals (H=left, L=right)
-                    if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        match key.code {
-                            KeyCode::Char('h') => { app.terminal_state.prev_terminal(); continue; }
-                            KeyCode::Char('l') => { app.terminal_state.next_terminal(); continue; }
-                            _ => {}
-                        }
-                    }
-
-                    // Handle Enter (needs &mut terminal_state for execute)
-                    if key.code == KeyCode::Enter {
-                        app.terminal_state.execute().await;
-                        continue;
-                    }
-
-                    // Handle Esc
-                    if key.code == KeyCode::Esc {
-                        app.terminal_state.active_mut().completer.dismiss();
-                        app.input_mode = InputMode::Normal;
-                        continue;
-                    }
-
-                    let term = app.terminal_state.active_mut();
-
-                    // Suggestion popup navigation
-                    if term.completer.visible {
-                        match key.code {
-                            KeyCode::Down => { term.completer.next(); continue; }
-                            KeyCode::Up => { term.completer.prev(); continue; }
-                            KeyCode::Tab => {
-                                if let Some(new_input) = term.completer.accept_selected(&term.input) {
-                                    term.input = new_input;
-                                    term.cursor_pos = term.input.len();
-                                    term.completer.notify_keystroke();
-                                }
-                                continue;
-                            }
-                            _ => { term.completer.dismiss(); }
-                        }
-                    }
-
-                    match key.code {
-                        KeyCode::Backspace => term.backspace(),
-                        KeyCode::Delete => term.delete(),
-                        KeyCode::Left => term.cursor_left(),
-                        KeyCode::Right => term.cursor_right(),
-                        // Shift+Up/Down: scroll output (reliable in all terminals)
-                        KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                            term.scroll_up(3);
-                        }
-                        KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                            term.scroll_down(3);
-                        }
-                        KeyCode::Up => term.history_up(),
-                        KeyCode::Down => term.history_down(),
-                        KeyCode::PageUp => term.scroll_up(10),
-                        KeyCode::PageDown => term.scroll_down(10),
-                        KeyCode::Tab => {
-                            if let Some(new_input) = term.completer.accept_selected(&term.input) {
-                                term.input = new_input;
-                                term.cursor_pos = term.input.len();
-                                term.completer.notify_keystroke();
-                            }
-                        }
-                        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            term.cursor_home();
-                        }
-                        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            term.cursor_end();
-                        }
-                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            term.clear_line();
-                        }
-                        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            term.delete_word_backward();
-                        }
-                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            term.input.clear();
-                            term.cursor_pos = 0;
-                            term.completer.dismiss();
-                        }
-                        KeyCode::Char(c) => term.insert_char(c),
-                        _ => {}
-                    }
-                    continue;
-                }
-
-                // ── Instance info popup ──
-                if app.instances_state.show_info_popup
-                    && app.active_tab == AppTab::Instances
-                    && app.input_mode == InputMode::Normal
-                {
-                    // Search input mode inside popup
-                    if let Some(ref mut p) = app.instances_state.info_popup {
-                        if p.search_active {
-                            match key.code {
-                                KeyCode::Esc => {
-                                    p.search_active = false;
-                                    p.search_query.clear();
-                                    p.update_search();
-                                }
-                                KeyCode::Enter => {
-                                    p.search_active = false;
-                                }
-                                KeyCode::Backspace => {
-                                    p.search_query.pop();
-                                    p.update_search();
-                                }
-                                KeyCode::Char(c) => {
-                                    p.search_query.push(c);
-                                    p.update_search();
-                                }
-                                _ => {}
-                            }
-                            continue;
-                        }
-                    }
-
-                    match key.code {
-                        KeyCode::Esc => {
-                            if let Some(ref mut p) = app.instances_state.info_popup {
-                                if !p.search_query.is_empty() {
-                                    // first Esc clears search
-                                    p.search_query.clear();
-                                    p.update_search();
-                                } else {
-                                    app.instances_state.show_info_popup = false;
-                                }
-                            } else {
-                                app.instances_state.show_info_popup = false;
-                            }
-                        }
-                        KeyCode::Char('q') => {
-                            app.instances_state.show_info_popup = false;
-                        }
-                        KeyCode::Char('/') => {
-                            if let Some(ref mut p) = app.instances_state.info_popup {
-                                p.search_active = true;
-                                p.search_query.clear();
-                                p.update_search();
-                            }
-                        }
-                        KeyCode::Char('n') => {
-                            if let Some(ref mut p) = app.instances_state.info_popup {
-                                p.next_match();
-                            }
-                        }
-                        KeyCode::Char('N') => {
-                            if let Some(ref mut p) = app.instances_state.info_popup {
-                                p.prev_match();
-                            }
-                        }
-                        KeyCode::Tab => {
-                            if let Some(ref mut p) = app.instances_state.info_popup {
-                                p.tab = match p.tab {
-                                    instances::InfoTab::Human => instances::InfoTab::Json,
-                                    instances::InfoTab::Json  => instances::InfoTab::Human,
-                                };
-                                p.scroll = 0;
-                                p.update_search(); // re-run search for new tab's lines
-                            }
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            if let Some(ref mut p) = app.instances_state.info_popup {
-                                p.scroll_down(1);
-                            }
-                        }
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            if let Some(ref mut p) = app.instances_state.info_popup {
-                                p.scroll_up(1);
-                            }
-                        }
-                        KeyCode::PageDown => {
-                            if let Some(ref mut p) = app.instances_state.info_popup {
-                                p.scroll_down(10);
-                            }
-                        }
-                        KeyCode::PageUp => {
-                            if let Some(ref mut p) = app.instances_state.info_popup {
-                                p.scroll_up(10);
-                            }
-                        }
-                        _ => {}
-                    }
-                    continue;
-                }
-
-                // ── Instance search mode ──
-                if app.instances_state.search_active
-                    && app.active_tab == AppTab::Instances
-                    && app.input_mode == InputMode::Normal
-                {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Enter => {
-                            app.instances_state.search_active = false;
-                            if key.code == KeyCode::Esc {
-                                app.instances_state.search_query.clear();
-                                app.instances_state.filtered_instances.clear();
-                            }
-                        }
-                        KeyCode::Backspace => {
-                            app.instances_state.search_query.pop();
-                            app.instances_state.update_instance_search();
-                        }
-                        KeyCode::Char(c) => {
-                            app.instances_state.search_query.push(c);
-                            app.instances_state.update_instance_search();
-                        }
-                        _ => {}
-                    }
-                    continue;
-                }
-
-                // ── SSM Input mode (Instances tab) — forward raw bytes to PTY ──
-                if app.input_mode == InputMode::SsmInput {
-                    match key.code {
-                        // Ctrl+D: close active session
-                        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            app.instances_state.disconnect_ssm();
-                            if app.instances_state.ssm_sessions.is_empty() {
-                                app.input_mode = InputMode::Normal;
-                                app.instances_state.focus = instances::InstanceFocus::InstanceList;
-                            }
-                        }
-                        // F4 / F5: switch between open sessions (no conflict — F1-F3 are global)
-                        KeyCode::F(4) => { app.instances_state.prev_session(); }
-                        KeyCode::F(5) => { app.instances_state.next_session(); }
-                        // Tab: exit SSM input, cycle focus
-                        KeyCode::Tab => {
-                            app.input_mode = InputMode::Normal;
-                            app.instances_state.cycle_focus();
-                        }
-                        // Everything else: forward as raw bytes to PTY
-                        _ => {
-                            if let Some(bytes) = key_to_pty_bytes(key) {
-                                app.instances_state.write_input(&bytes);
-                            }
-                        }
-                    }
-                    continue;
-                }
-
-                // ── Normal mode ──
-                match key.code {
-                    KeyCode::Char('q') => {
-                        if app.running_count > 0 {
-                            app.show_confirm = true;
-                            app.confirm_message = format!(
-                                "Stop {} running session(s) and quit?",
-                                app.running_count
-                            );
-                            app.confirm_action = ConfirmAction::Quit;
-                        } else {
-                            app.should_quit = true;
-                        }
-                    }
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        app.should_quit = true;
-                    }
-                    KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && app.active_tab == AppTab::Sessions
-                        && app.input_mode == InputMode::Normal =>
-                    {
-                        app.reload_aliases();
-                    }
-
-                    // Terminal tab: normal mode keys
-                    KeyCode::Char('i') if app.active_tab == AppTab::Terminal => {
-                        app.input_mode = InputMode::TerminalInput;
-                    }
-                    KeyCode::Up | KeyCode::Char('k') if app.active_tab == AppTab::Terminal => {
-                        app.terminal_state.active_mut().scroll_up(3);
-                    }
-                    KeyCode::Down | KeyCode::Char('j') if app.active_tab == AppTab::Terminal => {
-                        app.terminal_state.active_mut().scroll_down(3);
-                    }
-                    KeyCode::Char('h') if app.active_tab == AppTab::Terminal => {
-                        app.terminal_state.prev_terminal();
-                    }
-                    KeyCode::Char('l') if app.active_tab == AppTab::Terminal => {
-                        app.terminal_state.next_terminal();
-                    }
-
-                    // Instances tab: normal mode keys
-                    KeyCode::Tab if app.active_tab == AppTab::Instances => {
-                        app.instances_state.cycle_focus();
-                        // Auto-enter SsmInput mode when focusing SSM terminal
-                        if app.instances_state.focus == instances::InstanceFocus::SsmTerminal {
-                            app.input_mode = InputMode::SsmInput;
-                        }
-                    }
-                    KeyCode::Up | KeyCode::Char('k') if app.active_tab == AppTab::Instances => {
-                        if app.instances_state.region_dropdown_open {
-                            app.instances_state.prev_region();
-                        } else {
-                            match app.instances_state.focus {
-                                instances::InstanceFocus::RegionList => {},
-                                instances::InstanceFocus::InstanceList => app.instances_state.prev_instance(),
-                                instances::InstanceFocus::SsmTerminal => {},
-                            }
-                        }
-                    }
-                    KeyCode::Down | KeyCode::Char('j') if app.active_tab == AppTab::Instances => {
-                        if app.instances_state.region_dropdown_open {
-                            app.instances_state.next_region();
-                        } else {
-                            match app.instances_state.focus {
-                                instances::InstanceFocus::RegionList => {},
-                                instances::InstanceFocus::InstanceList => app.instances_state.next_instance(),
-                                instances::InstanceFocus::SsmTerminal => {},
-                            }
-                        }
-                    }
-                    KeyCode::Enter if app.active_tab == AppTab::Instances => {
-                        if app.instances_state.region_dropdown_open {
-                            app.instances_state.region_dropdown_open = false;
-                            app.instances_state.fetch_instances();
-                        } else {
-                            match app.instances_state.focus {
-                                instances::InstanceFocus::RegionList => {
-                                    app.instances_state.region_dropdown_open = true;
-                                }
-                                instances::InstanceFocus::InstanceList => {
-                                    let size = terminal.size().unwrap_or_default();
-                                    // Approximate SSM panel: right ~64% width, minus header/footer
-                                    let rows = size.height.saturating_sub(5);
-                                    let cols = (size.width * 64 / 100).saturating_sub(2);
-                                    app.instances_state.connect_ssm(rows.max(10), cols.max(20));
-                                    app.instances_state.focus = instances::InstanceFocus::SsmTerminal;
-                                    app.input_mode = InputMode::SsmInput;
-                                }
-                                instances::InstanceFocus::SsmTerminal => {}
-                            }
-                        }
-                    }
-                    KeyCode::Esc if app.active_tab == AppTab::Instances => {
-                        if app.instances_state.region_dropdown_open {
-                            app.instances_state.region_dropdown_open = false;
-                        }
-                    }
-                    KeyCode::Char('/') if app.active_tab == AppTab::Instances
-                        && app.instances_state.focus == instances::InstanceFocus::InstanceList =>
-                    {
-                        app.instances_state.search_active = true;
-                        app.instances_state.search_query.clear();
-                        app.instances_state.filtered_instances.clear();
-                    }
-                    KeyCode::Esc if app.active_tab == AppTab::Instances
-                        && !app.instances_state.search_query.is_empty() =>
-                    {
-                        app.instances_state.search_query.clear();
-                        app.instances_state.filtered_instances.clear();
-                    }
-                    KeyCode::Char('r') if app.active_tab == AppTab::Instances => {
-                        app.instances_state.fetch_instances();
-                    }
-                    KeyCode::Char('i') if app.active_tab == AppTab::Instances => {
-                        match app.instances_state.focus {
-                            instances::InstanceFocus::InstanceList => {
-                                // Show instance info popup
-                                if !app.instances_state.instances.is_empty() {
-                                    app.instances_state.fetch_instance_info();
-                                }
-                            }
-                            _ => {
-                                // Switch to SSM terminal input
-                                if !app.instances_state.ssm_sessions.is_empty() {
-                                    app.instances_state.focus = instances::InstanceFocus::SsmTerminal;
-                                    app.input_mode = InputMode::SsmInput;
-                                }
-                            }
-                        }
-                    }
-                    // [ / ] — cycle between open SSM sessions in normal mode
-                    KeyCode::Char('[') if app.active_tab == AppTab::Instances => {
-                        app.instances_state.prev_session();
-                    }
-                    KeyCode::Char(']') if app.active_tab == AppTab::Instances => {
-                        app.instances_state.next_session();
-                    }
-                    KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && app.active_tab == AppTab::Instances =>
-                    {
-                        app.instances_state.prev_profile();
-                        app.instances_state.fetch_instances();
-                    }
-                    KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && app.active_tab == AppTab::Instances =>
-                    {
-                        app.instances_state.next_profile();
-                        app.instances_state.fetch_instances();
-                    }
-
-                    // Sessions tab: normal mode keys
-                    KeyCode::Down | KeyCode::Char('j') if app.active_tab == AppTab::Sessions => {
-                        app.next();
-                    }
-                    KeyCode::Up | KeyCode::Char('k') if app.active_tab == AppTab::Sessions => {
-                        app.previous();
-                    }
-                    KeyCode::Tab | KeyCode::BackTab if app.active_tab == AppTab::Sessions => {
-                        app.toggle_panel();
-                    }
-                    KeyCode::Enter if app.active_tab == AppTab::Sessions => {
-                        app.start_selected().await;
-                        // Interactive SSM shell: suspend TUI, hand terminal to plugin
-                        if let Some(cmd) = app.pending_ssm_command.take() {
-                            disable_raw_mode()?;
-                            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-                            terminal.show_cursor()?;
-
-                            let _ = std::process::Command::new("sh")
-                                .arg("-c")
-                                .arg(&cmd)
-                                .stdin(std::process::Stdio::inherit())
-                                .stdout(std::process::Stdio::inherit())
-                                .stderr(std::process::Stdio::inherit())
-                                .status();
-
-                            enable_raw_mode()?;
-                            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-                            terminal.clear()?;
-                        }
-                    }
-                    KeyCode::Char('s') if app.active_tab == AppTab::Sessions => {
-                        app.stop_selected().await;
-                    }
-                    KeyCode::Char('S') if app.active_tab == AppTab::Sessions => {
-                        if app.running_count > 0 {
-                            app.show_confirm = true;
-                            app.confirm_message = format!(
-                                "Stop all {} running session(s)?",
-                                app.running_count
-                            );
-                            app.confirm_action = ConfirmAction::StopAll;
-                        }
-                    }
-                    KeyCode::Char('/') if app.active_tab == AppTab::Sessions => {
-                        app.input_mode = InputMode::Search;
-                        app.search_query.clear();
-                    }
-                    KeyCode::Esc => {
-                        if !app.search_query.is_empty() {
-                            app.search_query.clear();
-                            app.filtered_indices.clear();
-                        }
-                    }
-                    KeyCode::Char('g') if app.active_tab == AppTab::Sessions => {
-                        // Open credentials popup for connected SSO or IAM sessions;
-                        // otherwise fall back to go-to-top.
-                        let is_cred_connected = app.aliases.get(app.selected_index)
-                            .map(|a| matches!(
-                                a.kind,
-                                crate::parser::AliasKind::SsoLogin { .. }
-                                    | crate::parser::AliasKind::IamProfile { .. }
-                            ))
-                            .unwrap_or(false)
-                            && app.session_credentials.contains_key(
-                                app.aliases.get(app.selected_index)
-                                    .map(|a| a.name.as_str()).unwrap_or(""));
-                        if is_cred_connected {
-                            app.show_credentials_popup = true;
-                        } else {
-                            app.selected_index = 0;
-                        }
-                    }
-                    KeyCode::Char('G') if app.active_tab == AppTab::Sessions => {
-                        if !app.aliases.is_empty() {
-                            app.selected_index = app.aliases.len() - 1;
-                        }
-                    }
-                    _ => {}
+                    enable_raw_mode()?;
+                    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                    terminal.clear()?;
                 }
             }
         }

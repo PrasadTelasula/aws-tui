@@ -1,3 +1,4 @@
+use crate::containers::ContainersState;
 use crate::instances::InstancesState;
 use crate::parser::{Alias, AliasKind};
 use crate::session::{
@@ -16,6 +17,7 @@ pub enum AppTab {
     Sessions,
     Terminal,
     Instances,
+    Containers,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -60,6 +62,7 @@ pub struct App {
     pub active_panel: ActivePanel,
     pub input_mode: InputMode,
     pub instances_state: InstancesState,
+    pub containers_state: ContainersState,
     pub search_query: String,
     pub filtered_indices: Vec<usize>,
     pub session_statuses: Vec<SessionStatus>,
@@ -116,6 +119,7 @@ impl App {
             active_panel: ActivePanel::AliasList,
             input_mode: InputMode::Normal,
             instances_state: InstancesState::new(),
+            containers_state: ContainersState::new(),
             search_query: String::new(),
             filtered_indices: Vec::new(),
             session_statuses: statuses,
@@ -203,6 +207,7 @@ impl App {
         // Process terminal command output
         self.terminal_state.tick();
         self.instances_state.tick();
+        self.containers_state.tick();
 
         // Clear expired toasts (after 3 seconds)
         if let Some(ref toast) = self.toast {
@@ -563,15 +568,21 @@ impl App {
         self.terminal_state.live_profiles = profiles;
         self.terminal_state.sync_profiles();
 
-        // Sync connected profiles to instances tab
+        // Sync connected profiles to instances and containers tabs
         let profile_names: Vec<String> = self.terminal_state.live_profiles
             .iter()
             .map(|p| p.profile_name.clone())
             .collect();
         if self.instances_state.profiles != profile_names {
-            self.instances_state.profiles = profile_names;
+            self.instances_state.profiles = profile_names.clone();
             if self.instances_state.active_profile_idx >= self.instances_state.profiles.len() {
                 self.instances_state.active_profile_idx = 0;
+            }
+        }
+        if self.containers_state.profiles != profile_names {
+            self.containers_state.profiles = profile_names;
+            if self.containers_state.active_profile_idx >= self.containers_state.profiles.len() {
+                self.containers_state.active_profile_idx = 0;
             }
         }
     }

@@ -116,7 +116,9 @@ fn draw_profile_bar(f: &mut Frame, area: Rect, app: &App) {
 // ─── Sub-tab bar ─────────────────────────────────────────────────────────────
 
 fn draw_subtab_bar(f: &mut Frame, area: Rect, app: &App) {
+    use crate::containers::ContainersFocus;
     let cs = &app.containers_state;
+    let bar_focused = cs.focus == ContainersFocus::SubTabBar;
 
     let ecs_style = if cs.sub_tab == ContainersSubTab::Ecs {
         Style::default().fg(BG).bg(AMBER).add_modifier(Modifier::BOLD)
@@ -130,10 +132,18 @@ fn draw_subtab_bar(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let line = Line::from(vec![
-        Span::styled(" ", Style::default()),
+        Span::styled(
+            if bar_focused { " ▸ " } else { "   " },
+            Style::default().fg(BLUE),
+        ),
         Span::styled(format!(" {} ECS ", ICON_LAYERS), ecs_style),
         Span::styled("  ", Style::default()),
         Span::styled(format!(" {} EKS ", ICON_CUBE), eks_style),
+        if bar_focused {
+            Span::styled("  ←/→ or Enter to switch", Style::default().fg(FG4))
+        } else {
+            Span::raw("")
+        },
     ]);
     f.render_widget(
         Paragraph::new(line).style(Style::default().bg(BG_BAR)),
@@ -152,7 +162,7 @@ fn draw_ecs_body(f: &mut Frame, area: Rect, app: &App) {
     let div_area  = Rect::new(area.x + left_w,     area.y, 1,       area.height);
     let right_area= Rect::new(area.x + left_w + 1, area.y, right_w, area.height);
 
-    let div_color = if matches!(cs.focus, ContainersFocus::RegionList | ContainersFocus::ClusterList) { AMBER } else { FG4 };
+    let div_color = if matches!(cs.focus, ContainersFocus::RegionList | ContainersFocus::SubTabBar | ContainersFocus::ClusterList) { AMBER } else { FG4 };
     let div_lines: Vec<Line> = (0..div_area.height)
         .map(|_| Line::from(Span::styled("│", Style::default().fg(div_color))))
         .collect();
@@ -336,7 +346,7 @@ fn draw_eks_body(f: &mut Frame, area: Rect, app: &App) {
     let div_area  = Rect::new(area.x + left_w,     area.y, 1,       area.height);
     let right_area= Rect::new(area.x + left_w + 1, area.y, right_w, area.height);
 
-    let div_color = if matches!(cs.focus, ContainersFocus::RegionList | ContainersFocus::ClusterList) { BLUE } else { FG4 };
+    let div_color = if matches!(cs.focus, ContainersFocus::RegionList | ContainersFocus::SubTabBar | ContainersFocus::ClusterList) { BLUE } else { FG4 };
     let div_lines: Vec<Line> = (0..div_area.height)
         .map(|_| Line::from(Span::styled("│", Style::default().fg(div_color))))
         .collect();

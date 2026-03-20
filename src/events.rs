@@ -494,27 +494,23 @@ pub async fn handle_key_event(
 
         // ── Containers tab ──
         KeyCode::Char('1') if app.active_tab == AppTab::Containers => {
-            if app.containers_state.sub_tab != ContainersSubTab::Ecs {
-                app.containers_state.sub_tab = ContainersSubTab::Ecs;
-                app.containers_state.focus = ContainersFocus::RegionList;
-                if app.containers_state.ecs_clusters.is_empty()
-                    && !app.containers_state.loading_ecs_clusters
-                    && !app.containers_state.profiles.is_empty()
-                {
-                    app.containers_state.fetch_ecs_clusters();
-                }
+            app.containers_state.sub_tab = ContainersSubTab::Ecs;
+            app.containers_state.focus = ContainersFocus::ClusterList;
+            if app.containers_state.ecs_clusters.is_empty()
+                && !app.containers_state.loading_ecs_clusters
+                && !app.containers_state.profiles.is_empty()
+            {
+                app.containers_state.fetch_ecs_clusters();
             }
         }
         KeyCode::Char('2') if app.active_tab == AppTab::Containers => {
-            if app.containers_state.sub_tab != ContainersSubTab::Eks {
-                app.containers_state.sub_tab = ContainersSubTab::Eks;
-                app.containers_state.focus = ContainersFocus::RegionList;
-                if app.containers_state.eks_clusters.is_empty()
-                    && !app.containers_state.loading_eks_clusters
-                    && !app.containers_state.profiles.is_empty()
-                {
-                    app.containers_state.fetch_eks_clusters();
-                }
+            app.containers_state.sub_tab = ContainersSubTab::Eks;
+            app.containers_state.focus = ContainersFocus::ClusterList;
+            if app.containers_state.eks_clusters.is_empty()
+                && !app.containers_state.loading_eks_clusters
+                && !app.containers_state.profiles.is_empty()
+            {
+                app.containers_state.fetch_eks_clusters();
             }
         }
         KeyCode::Tab if app.active_tab == AppTab::Containers => {
@@ -526,6 +522,7 @@ pub async fn handle_key_event(
             } else {
                 match app.containers_state.focus {
                     ContainersFocus::RegionList  => {}
+                    ContainersFocus::SubTabBar   => {}
                     ContainersFocus::ClusterList => app.containers_state.prev_cluster(),
                     ContainersFocus::DetailList  => app.containers_state.prev_detail(),
                 }
@@ -537,9 +534,20 @@ pub async fn handle_key_event(
             } else {
                 match app.containers_state.focus {
                     ContainersFocus::RegionList  => {}
+                    ContainersFocus::SubTabBar   => {}
                     ContainersFocus::ClusterList => app.containers_state.next_cluster(),
                     ContainersFocus::DetailList  => app.containers_state.next_detail(),
                 }
+            }
+        }
+        // Left/Right switch ECS<->EKS when focused on sub-tab bar
+        KeyCode::Left | KeyCode::Right
+            if app.active_tab == AppTab::Containers
+                && app.containers_state.focus == ContainersFocus::SubTabBar =>
+        {
+            app.containers_state.switch_sub_tab();
+            if !app.containers_state.profiles.is_empty() {
+                app.containers_state.fetch_clusters();
             }
         }
         KeyCode::Enter if app.active_tab == AppTab::Containers => {
@@ -550,6 +558,12 @@ pub async fn handle_key_event(
                 match app.containers_state.focus {
                     ContainersFocus::RegionList  => {
                         app.containers_state.region_dropdown_open = true;
+                    }
+                    ContainersFocus::SubTabBar   => {
+                        app.containers_state.switch_sub_tab();
+                        if !app.containers_state.profiles.is_empty() {
+                            app.containers_state.fetch_clusters();
+                        }
                     }
                     ContainersFocus::ClusterList => {
                         app.containers_state.fetch_detail_for_selected();

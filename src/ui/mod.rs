@@ -286,6 +286,14 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
                     spans.push(key_span("1/2"));
                     spans.push(desc_span(" ECS/EKS  "));
                 }
+                ContainersFocus::SubTabBar => {
+                    spans.push(key_span("←/→"));
+                    spans.push(desc_span(" switch tab  "));
+                    spans.push(key_span("Enter"));
+                    spans.push(desc_span(" select  "));
+                    spans.push(key_span("Tab"));
+                    spans.push(desc_span(" focus  "));
+                }
                 ContainersFocus::ClusterList => {
                     spans.push(key_span("↑↓"));
                     spans.push(desc_span(" cluster  "));

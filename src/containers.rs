@@ -14,6 +14,7 @@ pub enum ContainersSubTab {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContainersFocus {
     RegionList,
+    SubTabBar,
     ClusterList,
     DetailList,
 }
@@ -245,9 +246,17 @@ impl ContainersState {
 
     pub fn cycle_focus(&mut self) {
         self.focus = match self.focus {
-            ContainersFocus::RegionList  => ContainersFocus::ClusterList,
+            ContainersFocus::RegionList  => ContainersFocus::SubTabBar,
+            ContainersFocus::SubTabBar   => ContainersFocus::ClusterList,
             ContainersFocus::ClusterList => ContainersFocus::DetailList,
             ContainersFocus::DetailList  => ContainersFocus::RegionList,
+        };
+    }
+
+    pub fn switch_sub_tab(&mut self) {
+        self.sub_tab = match self.sub_tab {
+            ContainersSubTab::Ecs => ContainersSubTab::Eks,
+            ContainersSubTab::Eks => ContainersSubTab::Ecs,
         };
     }
 

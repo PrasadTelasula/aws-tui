@@ -734,6 +734,15 @@ pub async fn handle_key_event(
                 app.containers_state.fetch_ecs_info();
             }
         }
+        KeyCode::Char('e')
+            if app.active_tab == AppTab::Containers
+                && app.containers_state.sub_tab == ContainersSubTab::Ecs
+                && app.containers_state.focus == ContainersFocus::ClusterList =>
+        {
+            if let Some(cmd) = app.containers_state.build_exec_command() {
+                return Some(cmd);
+            }
+        }
         KeyCode::Char('r') if app.active_tab == AppTab::Containers => {
             app.containers_state.fetch_clusters();
         }

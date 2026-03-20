@@ -968,6 +968,39 @@ impl ContainersState {
         });
     }
 
+    // ── ECS exec-command ──────────────────────────────────────────────
+
+    /// Build the `aws ecs execute-command` invocation for the selected tree
+    /// item. Returns `None` if the item is not a Task or Container, or if
+    /// no profile/region are set.
+    pub fn build_exec_command(&self) -> Option<String> {
+        let item = self.ecs_tree.get(self.selected_ecs_tree)?;
+        let profile = self.active_profile()?;
+        let region = self.active_region();
+
+        match item.kind {
+            EcsTreeItemKind::Container => {
+                // Walk backward to find the parent Task item
+                let task_id = self.ecs_tree[..self.selected_ecs_tree]
+                    .iter()
+                    .rev()
+                    .find(|i| i.kind == EcsTreeItemKind::Task)
+                    .map(|i| i.name.clone())?;
+                Some(format!(
+                    "aws ecs execute-command --cluster {} --task {} --container {} --interactive --command /bin/sh --region {} --profile {}",
+                    item.cluster_name, task_id, item.name, region, profile
+                ))
+            }
+            EcsTreeItemKind::Task => {
+                Some(format!(
+                    "aws ecs execute-command --cluster {} --task {} --interactive --command /bin/sh --region {} --profile {}",
+                    item.cluster_name, item.name, region, profile
+                ))
+            }
+            _ => None,
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────
 
     pub fn fetch_clusters(&mut self) {

@@ -483,6 +483,11 @@ fn draw_ecs_detail_panel(f: &mut Frame, area: Rect, app: &App) {
             }
             lines.push(detail_line("Cluster", &item.cluster_name, FG2));
             lines.push(detail_line("Service", &item.service_name, FG2));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  e exec into task  i info",
+                Style::default().fg(FG3),
+            )));
         }
         EcsTreeItemKind::Container => {
             lines.push(detail_line("Status", &item.status, status_color(&item.status)));
@@ -491,6 +496,11 @@ fn draw_ecs_detail_panel(f: &mut Frame, area: Rect, app: &App) {
             }
             lines.push(detail_line("Service", &item.service_name, FG2));
             lines.push(detail_line("Cluster", &item.cluster_name, FG2));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  e exec into container  i info",
+                Style::default().fg(FG3),
+            )));
         }
     }
     f.render_widget(Paragraph::new(lines), rows[1]);

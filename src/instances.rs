@@ -16,11 +16,21 @@ pub struct InstanceInfoPopup {
     pub scroll: u16,
     pub human_lines: Vec<String>,
     pub json_lines: Vec<String>,
+    // Search within popup
+    pub search_query: String,
+    pub search_active: bool,
+    pub search_matches: Vec<usize>,  // absolute line indices with a match
+    pub search_match_idx: usize,     // which match is "current"
 }
 
 impl InstanceInfoPopup {
     pub fn new_loading() -> Self {
-        Self { loading: true, tab: InfoTab::Human, scroll: 0, human_lines: Vec::new(), json_lines: Vec::new() }
+        Self {
+            loading: true, tab: InfoTab::Human, scroll: 0,
+            human_lines: Vec::new(), json_lines: Vec::new(),
+            search_query: String::new(), search_active: false,
+            search_matches: Vec::new(), search_match_idx: 0,
+        }
     }
 
     pub fn lines(&self) -> &Vec<String> {
@@ -37,6 +47,43 @@ impl InstanceInfoPopup {
 
     pub fn scroll_up(&mut self, n: u16) {
         self.scroll = self.scroll.saturating_sub(n);
+    }
+
+    pub fn update_search(&mut self) {
+        if self.search_query.is_empty() {
+            self.search_matches.clear();
+            self.search_match_idx = 0;
+            return;
+        }
+        let query = self.search_query.to_lowercase();
+        self.search_matches = self.lines().iter().enumerate()
+            .filter(|(_, l)| l.to_lowercase().contains(&query))
+            .map(|(i, _)| i)
+            .collect();
+        self.search_match_idx = 0;
+        self.jump_to_current_match();
+    }
+
+    pub fn next_match(&mut self) {
+        if self.search_matches.is_empty() { return; }
+        self.search_match_idx = (self.search_match_idx + 1) % self.search_matches.len();
+        self.jump_to_current_match();
+    }
+
+    pub fn prev_match(&mut self) {
+        if self.search_matches.is_empty() { return; }
+        self.search_match_idx = if self.search_match_idx == 0 {
+            self.search_matches.len() - 1
+        } else {
+            self.search_match_idx - 1
+        };
+        self.jump_to_current_match();
+    }
+
+    fn jump_to_current_match(&mut self) {
+        if let Some(&line_idx) = self.search_matches.get(self.search_match_idx) {
+            self.scroll = line_idx as u16;
+        }
     }
 }
 
@@ -381,29 +428,28 @@ impl InstancesState {
                     let human = format_instance_human(&raw);
                     let json_lines = format_json_pretty(&raw);
                     InstanceInfoPopup {
-                        loading: false,
-                        tab: InfoTab::Human,
-                        scroll: 0,
-                        human_lines: human,
-                        json_lines,
+                        loading: false, tab: InfoTab::Human, scroll: 0,
+                        human_lines: human, json_lines,
+                        search_query: String::new(), search_active: false,
+                        search_matches: Vec::new(), search_match_idx: 0,
                     }
                 }
                 Ok(out) => {
                     let err = String::from_utf8_lossy(&out.stderr).to_string();
                     InstanceInfoPopup {
-                        loading: false,
-                        tab: InfoTab::Human,
-                        scroll: 0,
+                        loading: false, tab: InfoTab::Human, scroll: 0,
                         human_lines: vec![format!("Error: {}", err)],
                         json_lines: vec![format!("Error: {}", err)],
+                        search_query: String::new(), search_active: false,
+                        search_matches: Vec::new(), search_match_idx: 0,
                     }
                 }
                 Err(e) => InstanceInfoPopup {
-                    loading: false,
-                    tab: InfoTab::Human,
-                    scroll: 0,
+                    loading: false, tab: InfoTab::Human, scroll: 0,
                     human_lines: vec![format!("Error: {}", e)],
                     json_lines: vec![format!("Error: {}", e)],
+                    search_query: String::new(), search_active: false,
+                    search_matches: Vec::new(), search_match_idx: 0,
                 },
             };
             let _ = tx.send(popup);

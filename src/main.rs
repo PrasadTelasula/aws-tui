@@ -352,9 +352,65 @@ async fn run_app(
                     && app.active_tab == AppTab::Instances
                     && app.input_mode == InputMode::Normal
                 {
+                    // Search input mode inside popup
+                    if let Some(ref mut p) = app.instances_state.info_popup {
+                        if p.search_active {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    p.search_active = false;
+                                    p.search_query.clear();
+                                    p.update_search();
+                                }
+                                KeyCode::Enter => {
+                                    p.search_active = false;
+                                }
+                                KeyCode::Backspace => {
+                                    p.search_query.pop();
+                                    p.update_search();
+                                }
+                                KeyCode::Char(c) => {
+                                    p.search_query.push(c);
+                                    p.update_search();
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+                    }
+
                     match key.code {
-                        KeyCode::Esc | KeyCode::Char('q') => {
+                        KeyCode::Esc => {
+                            if let Some(ref mut p) = app.instances_state.info_popup {
+                                if !p.search_query.is_empty() {
+                                    // first Esc clears search
+                                    p.search_query.clear();
+                                    p.update_search();
+                                } else {
+                                    app.instances_state.show_info_popup = false;
+                                }
+                            } else {
+                                app.instances_state.show_info_popup = false;
+                            }
+                        }
+                        KeyCode::Char('q') => {
                             app.instances_state.show_info_popup = false;
+                        }
+                        KeyCode::Char('/') => {
+                            if let Some(ref mut p) = app.instances_state.info_popup {
+                                p.search_active = true;
+                                p.search_query.clear();
+                                p.update_search();
+                            }
+                        }
+                        KeyCode::Char('n') => {
+                            if let Some(ref mut p) = app.instances_state.info_popup {
+                                p.next_match();
+                            }
+                        }
+                        KeyCode::Char('N') => {
+                            if let Some(ref mut p) = app.instances_state.info_popup {
+                                p.prev_match();
+                            }
                         }
                         KeyCode::Tab => {
                             if let Some(ref mut p) = app.instances_state.info_popup {
@@ -363,6 +419,7 @@ async fn run_app(
                                     instances::InfoTab::Json  => instances::InfoTab::Human,
                                 };
                                 p.scroll = 0;
+                                p.update_search(); // re-run search for new tab's lines
                             }
                         }
                         KeyCode::Down | KeyCode::Char('j') => {

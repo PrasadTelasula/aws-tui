@@ -861,29 +861,40 @@ fn draw_instance_info_popup(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
+    // ── Split inner: content + optional search bar ────────────────────
+    let show_search_bar = popup.search_active || !popup.search_query.is_empty();
+    let (content_area, search_bar_area) = if show_search_bar {
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(inner);
+        (split[0], Some(split[1]))
+    } else {
+        (inner, None)
+    };
+
     // ── Content ──────────────────────────────────────────────────────
     let lines_data = popup.lines();
     let scroll = popup.scroll as usize;
-    let visible_h = inner.height as usize;
+    let visible_h = content_area.height as usize;
+    let query_lower = popup.search_query.to_lowercase();
+    let current_match_line = popup.search_matches.get(popup.search_match_idx).copied();
 
     let lines: Vec<Line> = lines_data
         .iter()
+        .enumerate()
         .skip(scroll)
         .take(visible_h)
-        .map(|l| {
-            if l.starts_with("──") {
-                // Section header
+        .map(|(abs_idx, l)| {
+            let line = if l.starts_with("──") {
                 Line::from(Span::styled(l.as_str(), Style::default().fg(TEAL).add_modifier(Modifier::BOLD)))
             } else if l.starts_with("  Error") {
                 Line::from(Span::styled(l.as_str(), Style::default().fg(RED)))
             } else if popup.tab == InfoTab::Json {
-                // JSON syntax colouring: keys in blue, strings in green, numbers in amber
                 colorize_json_line(l)
             } else {
-                // Human: label in FG3, value in FG
-                if let Some(idx) = l.find("  ").filter(|_| l.starts_with("  ") && l.len() > 2) {
-                    // find the gap between label and value (multiple spaces after label)
-                    let trimmed = &l[2..]; // strip leading 2 spaces
+                if l.starts_with("  ") && l.len() > 2 {
+                    let trimmed = &l[2..];
                     if let Some(gap) = trimmed.find("  ") {
                         let label = &trimmed[..gap];
                         let value = trimmed[gap..].trim_start();
@@ -893,17 +904,25 @@ fn draw_instance_info_popup(f: &mut Frame, area: Rect, app: &App) {
                             Span::styled(value.to_string(), Style::default().fg(FG)),
                         ])
                     } else {
-                        let _ = idx;
                         Line::from(Span::styled(l.as_str(), Style::default().fg(FG2)))
                     }
                 } else {
                     Line::from(Span::styled(l.as_str(), Style::default().fg(FG2)))
                 }
+            };
+
+            // Highlight search matches
+            if !query_lower.is_empty() && l.to_lowercase().contains(&query_lower) {
+                let bg = if Some(abs_idx) == current_match_line { AMBER } else { BG_HL };
+                let fg = if Some(abs_idx) == current_match_line { BG } else { FG };
+                line.patch_style(Style::default().fg(fg).bg(bg))
+            } else {
+                line
             }
         })
         .collect();
 
-    f.render_widget(Paragraph::new(lines), inner);
+    f.render_widget(Paragraph::new(lines), content_area);
 
     // Scrollbar
     let total = lines_data.len();
@@ -911,8 +930,39 @@ fn draw_instance_info_popup(f: &mut Frame, area: Rect, app: &App) {
         let mut sb = ScrollbarState::new(total).position(scroll);
         f.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight).style(Style::default().fg(FG4)),
-            inner,
+            content_area,
             &mut sb,
+        );
+    }
+
+    // ── Search bar ────────────────────────────────────────────────────
+    if let Some(sb_area) = search_bar_area {
+        let match_info = if query_lower.is_empty() {
+            String::new()
+        } else if popup.search_matches.is_empty() {
+            "  no matches".to_string()
+        } else {
+            format!("  {}/{}", popup.search_match_idx + 1, popup.search_matches.len())
+        };
+
+        let bar_spans = if popup.search_active {
+            vec![
+                Span::styled(" / ", Style::default().fg(AMBER).add_modifier(Modifier::BOLD)),
+                Span::styled(popup.search_query.as_str(), Style::default().fg(FG)),
+                Span::styled("█", Style::default().fg(AMBER)),
+                Span::styled(match_info, Style::default().fg(if popup.search_matches.is_empty() { RED } else { TEAL })),
+            ]
+        } else {
+            vec![
+                Span::styled(" / ", Style::default().fg(TEAL)),
+                Span::styled(popup.search_query.as_str(), Style::default().fg(TEAL)),
+                Span::styled(match_info, Style::default().fg(TEAL)),
+                Span::styled("   n/N: next/prev  Esc: clear", Style::default().fg(FG4)),
+            ]
+        };
+        f.render_widget(
+            Paragraph::new(Line::from(bar_spans)).style(Style::default().bg(BG_BAR)),
+            sb_area,
         );
     }
 }

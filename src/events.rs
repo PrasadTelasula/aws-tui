@@ -294,6 +294,33 @@ pub async fn handle_key_event(
         return None;
     }
 
+    // ── ECS tree search mode ─────────────────────────────────────────
+    if app.containers_state.ecs_search_active
+        && app.active_tab == AppTab::Containers
+        && app.containers_state.sub_tab == ContainersSubTab::Ecs
+        && app.input_mode == InputMode::Normal
+    {
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter => {
+                app.containers_state.ecs_search_active = false;
+                if key.code == KeyCode::Esc {
+                    app.containers_state.ecs_search_query.clear();
+                    app.containers_state.update_ecs_search();
+                }
+            }
+            KeyCode::Backspace => {
+                app.containers_state.ecs_search_query.pop();
+                app.containers_state.update_ecs_search();
+            }
+            KeyCode::Char(c) => {
+                app.containers_state.ecs_search_query.push(c);
+                app.containers_state.update_ecs_search();
+            }
+            _ => {}
+        }
+        return None;
+    }
+
     // ── Instance search mode ────────────────────────────────────────
     if app.instances_state.search_active
         && app.active_tab == AppTab::Instances
@@ -598,6 +625,23 @@ pub async fn handle_key_event(
             {
                 app.containers_state.ecs_collapse_selected();
             }
+        }
+        KeyCode::Char('/')
+            if app.active_tab == AppTab::Containers
+                && app.containers_state.sub_tab == ContainersSubTab::Ecs
+                && app.containers_state.focus == ContainersFocus::ClusterList =>
+        {
+            app.containers_state.ecs_search_active = true;
+            app.containers_state.ecs_search_query.clear();
+            app.containers_state.update_ecs_search();
+        }
+        KeyCode::Esc
+            if app.active_tab == AppTab::Containers
+                && app.containers_state.sub_tab == ContainersSubTab::Ecs
+                && !app.containers_state.ecs_search_query.is_empty() =>
+        {
+            app.containers_state.ecs_search_query.clear();
+            app.containers_state.update_ecs_search();
         }
         KeyCode::Char('r') if app.active_tab == AppTab::Containers => {
             app.containers_state.fetch_clusters();

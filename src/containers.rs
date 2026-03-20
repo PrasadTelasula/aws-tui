@@ -129,6 +129,9 @@ pub struct ContainersState {
     pub ecs_tree: Vec<EcsTreeItem>,
     pub selected_ecs_tree: usize,
     pub loading_ecs_clusters: bool,
+    pub ecs_search_active: bool,
+    pub ecs_search_query: String,
+    pub ecs_filtered_indices: Vec<usize>,
 
     // EKS
     pub eks_clusters: Vec<EksCluster>,
@@ -159,6 +162,9 @@ impl ContainersState {
             ecs_tree: Vec::new(),
             selected_ecs_tree: 0,
             loading_ecs_clusters: false,
+            ecs_search_active: false,
+            ecs_search_query: String::new(),
+            ecs_filtered_indices: Vec::new(),
             eks_clusters: Vec::new(),
             selected_eks_cluster: 0,
             loading_eks_clusters: false,
@@ -213,18 +219,49 @@ impl ContainersState {
     // ── ECS tree navigation ───────────────────────────────────────────
 
     pub fn ecs_next_item(&mut self) {
-        if !self.ecs_tree.is_empty() {
+        if self.ecs_tree.is_empty() { return; }
+        if !self.ecs_filtered_indices.is_empty() {
+            let pos = self.ecs_filtered_indices.iter()
+                .position(|&i| i == self.selected_ecs_tree)
+                .unwrap_or(0);
+            let next = (pos + 1) % self.ecs_filtered_indices.len();
+            self.selected_ecs_tree = self.ecs_filtered_indices[next];
+        } else if self.ecs_search_query.is_empty() {
             self.selected_ecs_tree = (self.selected_ecs_tree + 1) % self.ecs_tree.len();
         }
     }
 
     pub fn ecs_prev_item(&mut self) {
-        if !self.ecs_tree.is_empty() {
+        if self.ecs_tree.is_empty() { return; }
+        if !self.ecs_filtered_indices.is_empty() {
+            let pos = self.ecs_filtered_indices.iter()
+                .position(|&i| i == self.selected_ecs_tree)
+                .unwrap_or(0);
+            let prev = if pos == 0 { self.ecs_filtered_indices.len() - 1 } else { pos - 1 };
+            self.selected_ecs_tree = self.ecs_filtered_indices[prev];
+        } else if self.ecs_search_query.is_empty() {
             self.selected_ecs_tree = if self.selected_ecs_tree == 0 {
                 self.ecs_tree.len() - 1
             } else {
                 self.selected_ecs_tree - 1
             };
+        }
+    }
+
+    pub fn update_ecs_search(&mut self) {
+        if self.ecs_search_query.is_empty() {
+            self.ecs_filtered_indices.clear();
+            return;
+        }
+        let query = self.ecs_search_query.to_lowercase();
+        self.ecs_filtered_indices = self.ecs_tree.iter().enumerate()
+            .filter(|(_, item)| item.name.to_lowercase().contains(&query))
+            .map(|(i, _)| i)
+            .collect();
+        if !self.ecs_filtered_indices.is_empty()
+            && !self.ecs_filtered_indices.contains(&self.selected_ecs_tree)
+        {
+            self.selected_ecs_tree = self.ecs_filtered_indices[0];
         }
     }
 
@@ -301,6 +338,7 @@ impl ContainersState {
         if self.selected_ecs_tree >= self.ecs_tree.len() {
             self.selected_ecs_tree = self.ecs_tree.len().saturating_sub(1);
         }
+        self.update_ecs_search();
     }
 
     // ── EKS list navigation ───────────────────────────────────────────
@@ -530,6 +568,9 @@ impl ContainersState {
         self.loading_ecs_clusters = true;
         self.ecs_tree.clear();
         self.selected_ecs_tree = 0;
+        self.ecs_search_query.clear();
+        self.ecs_search_active = false;
+        self.ecs_filtered_indices.clear();
 
         tokio::spawn(async move {
             let list_out = Command::new("aws")

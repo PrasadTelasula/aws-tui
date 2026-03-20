@@ -649,6 +649,9 @@ pub async fn handle_key_event(
         }
         KeyCode::Tab if app.active_tab == AppTab::Containers => {
             app.containers_state.cycle_focus();
+            if app.containers_state.focus == ContainersFocus::EcsTerminal {
+                app.input_mode = InputMode::EcsExecInput;
+            }
         }
         KeyCode::Up | KeyCode::Char('k') if app.active_tab == AppTab::Containers => {
             if app.containers_state.region_dropdown_open {

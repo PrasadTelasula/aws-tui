@@ -1,6 +1,6 @@
 use super::*;
 use crate::app::App;
-use crate::containers::{ContainersFocus, ContainersSubTab};
+use crate::containers::{ContainersFocus, ContainersSubTab, EcsTreeItemKind};
 
 fn draw_region_row(f: &mut Frame, area: Rect, app: &App) {
     let cs = &app.containers_state;
@@ -168,7 +168,7 @@ fn draw_ecs_body(f: &mut Frame, area: Rect, app: &App) {
         .collect();
     f.render_widget(Paragraph::new(div_lines), div_area);
 
-    // ── Left: region selector + cluster list ──────────────────────────
+    // ── Left: region selector + ECS tree ─────────────────────────────
     let left_rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Min(3)])
@@ -177,162 +177,266 @@ fn draw_ecs_body(f: &mut Frame, area: Rect, app: &App) {
     draw_region_row(f, left_rows[0], app);
 
     // Header
+    let cluster_count = cs.ecs_tree.iter().filter(|i| i.depth == 0).count();
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(format!("  {} ECS Clusters", ICON_LAYERS), Style::default().fg(AMBER).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("  {} ECS", ICON_LAYERS), Style::default().fg(AMBER).add_modifier(Modifier::BOLD)),
             if cs.loading_ecs_clusters {
                 Span::styled(format!("  {} loading…", app.spinner()), Style::default().fg(AMBER))
             } else {
-                Span::styled(format!("  {}", cs.ecs_clusters.len()), Style::default().fg(FG3))
+                Span::styled(format!("  {} clusters", cluster_count), Style::default().fg(FG3))
             },
         ])),
         left_rows[1],
     );
 
-    let cluster_focused = cs.focus == ContainersFocus::ClusterList;
+    let tree_focused = cs.focus == ContainersFocus::ClusterList;
     let mut items: Vec<ListItem> = Vec::new();
 
-    if cs.ecs_clusters.is_empty() && !cs.loading_ecs_clusters {
+    if cs.ecs_tree.is_empty() && !cs.loading_ecs_clusters {
         items.push(ListItem::new(Line::from(Span::styled(
             "  no clusters  (press r)",
             Style::default().fg(FG4),
         ))));
     } else {
-        for (i, cluster) in cs.ecs_clusters.iter().enumerate() {
-            let selected = i == cs.selected_ecs_cluster;
-            let sel_bar = if selected && cluster_focused {
-                Span::styled("▌", Style::default().fg(AMBER))
-            } else {
-                Span::styled(" ", Style::default())
-            };
-            let status_color = status_color(&cluster.status);
-            let name_style = if selected && cluster_focused {
-                Style::default().fg(FG).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(FG2)
-            };
-            let mut item = ListItem::new(Line::from(vec![
-                sel_bar,
-                Span::styled(format!(" {} ", ICON_LAYERS), Style::default().fg(AMBER)),
-                Span::styled(cluster.name.clone(), name_style),
-                Span::styled(
-                    format!("  {} svc", cluster.active_services),
-                    Style::default().fg(FG3),
-                ),
-                Span::styled(
-                    format!("  {} run", cluster.running_tasks),
-                    Style::default().fg(if cluster.running_tasks > 0 { GREEN } else { FG4 }),
-                ),
-                if cluster.pending_tasks > 0 {
-                    Span::styled(format!("  {} pend", cluster.pending_tasks), Style::default().fg(AMBER))
-                } else {
-                    Span::raw("")
-                },
-                Span::styled(
-                    format!("  {}", cluster.status),
-                    Style::default().fg(status_color),
-                ),
-            ]));
-            if selected && cluster_focused {
-                item = item.style(Style::default().bg(BG_HL));
-            }
-            items.push(item);
+        for (i, item) in cs.ecs_tree.iter().enumerate() {
+            let selected = i == cs.selected_ecs_tree && tree_focused;
+            items.push(build_ecs_tree_item(item, selected));
         }
     }
     f.render_widget(List::new(items), left_rows[2]);
 
-    // ── Right: service list ───────────────────────────────────────────
-    let right_rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(3)])
-        .split(right_area);
-
-    // Header showing which cluster's services are displayed
-    let svc_header = if !cs.ecs_services_for.is_empty() {
-        format!("  {} Services — {}", ICON_COG2, cs.ecs_services_for)
-    } else {
-        format!("  {} Services", ICON_COG2)
-    };
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(svc_header, Style::default().fg(TEAL).add_modifier(Modifier::BOLD)),
-            if cs.loading_ecs_services {
-                Span::styled(format!("  {} loading…", app.spinner()), Style::default().fg(AMBER))
-            } else if !cs.ecs_services.is_empty() {
-                Span::styled(format!("  {}", cs.ecs_services.len()), Style::default().fg(FG3))
-            } else {
-                Span::raw("")
-            },
-        ])),
-        right_rows[0],
-    );
-
-    let detail_focused = cs.focus == ContainersFocus::DetailList;
-    let mut svc_items: Vec<ListItem> = Vec::new();
-
-    if let Some(ref err) = cs.last_error {
-        svc_items.push(ListItem::new(Line::from(Span::styled(
-            format!("  ✗ {}", err),
-            Style::default().fg(RED),
-        ))));
-    } else if cs.ecs_clusters.is_empty() && !cs.loading_ecs_clusters {
-        // nothing to show
-    } else if cs.ecs_services.is_empty() && !cs.loading_ecs_services {
-        let hint = if cs.ecs_services_for.is_empty() {
-            "  Select a cluster and press Enter"
-        } else {
-            "  No services in this cluster"
-        };
-        svc_items.push(ListItem::new(Line::from(Span::styled(hint, Style::default().fg(FG4)))));
-    } else {
-        for (i, svc) in cs.ecs_services.iter().enumerate() {
-            let selected = i == cs.selected_ecs_service;
-            let sel_bar = if selected && detail_focused {
-                Span::styled("▌", Style::default().fg(TEAL))
-            } else {
-                Span::styled(" ", Style::default())
-            };
-            let status_color = status_color(&svc.status);
-            let count_color = if svc.running == svc.desired { GREEN } else { AMBER };
-            let name_style = if selected && detail_focused {
-                Style::default().fg(FG).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(FG2)
-            };
-            let mut item = ListItem::new(Line::from(vec![
-                sel_bar,
-                Span::styled(format!(" {} ", ICON_COG2), Style::default().fg(TEAL)),
-                Span::styled(svc.name.clone(), name_style),
-                Span::styled(
-                    format!("  {}/{}", svc.running, svc.desired),
-                    Style::default().fg(count_color),
-                ),
-                if svc.pending > 0 {
-                    Span::styled(format!(" +{} pend", svc.pending), Style::default().fg(AMBER))
-                } else {
-                    Span::raw("")
-                },
-                Span::styled(
-                    format!("  {}", svc.status),
-                    Style::default().fg(status_color),
-                ),
-                Span::styled(
-                    format!("  {}", svc.task_definition),
-                    Style::default().fg(FG4),
-                ),
-            ]));
-            if selected && detail_focused {
-                item = item.style(Style::default().bg(BG_HL));
-            }
-            svc_items.push(item);
-        }
-    }
-    f.render_widget(List::new(svc_items), right_rows[1]);
+    // ── Right: detail panel ───────────────────────────────────────────
+    draw_ecs_detail_panel(f, right_area, app);
 
     // Region dropdown
     if cs.region_dropdown_open {
         draw_region_dropdown(f, area, app);
     }
+}
+
+fn build_ecs_tree_item(item: &crate::containers::EcsTreeItem, selected: bool) -> ListItem<'static> {
+    let indent: &str = match item.depth {
+        0 => "",
+        1 => "  ",
+        2 => "    ",
+        _ => "      ",
+    };
+
+    let (sel_color, icon_color) = match item.kind {
+        EcsTreeItemKind::Cluster   => (AMBER, AMBER),
+        EcsTreeItemKind::Service   => (TEAL,  TEAL),
+        EcsTreeItemKind::Task      => (MAUVE, MAUVE),
+        EcsTreeItemKind::Container => (GREEN, GREEN),
+    };
+
+    let sel_bar = if selected {
+        Span::styled("▌", Style::default().fg(sel_color))
+    } else {
+        Span::styled(" ", Style::default())
+    };
+
+    let name_style = if selected {
+        Style::default().fg(FG).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(FG2)
+    };
+
+    let mut spans: Vec<Span> = vec![sel_bar, Span::raw(indent)];
+
+    match item.kind {
+        EcsTreeItemKind::Cluster => {
+            let expand = if item.loading {
+                Span::styled(format!("⟳ "), Style::default().fg(AMBER))
+            } else if item.expanded {
+                Span::styled("▼ ", Style::default().fg(FG3))
+            } else {
+                Span::styled("▶ ", Style::default().fg(FG3))
+            };
+            spans.push(expand);
+            spans.push(Span::styled(format!("{} ", ICON_LAYERS), Style::default().fg(icon_color)));
+            spans.push(Span::styled(item.name.clone(), name_style));
+            if !item.extra.is_empty() {
+                spans.push(Span::styled(format!("  {}", item.extra), Style::default().fg(FG3)));
+            }
+            if item.count_b > 0 {
+                spans.push(Span::styled(format!("  {} pend", item.count_b), Style::default().fg(AMBER)));
+            }
+            spans.push(Span::styled(
+                format!("  {}", item.status),
+                Style::default().fg(status_color(&item.status)),
+            ));
+        }
+        EcsTreeItemKind::Service => {
+            let expand = if item.loading {
+                Span::styled("⟳ ", Style::default().fg(TEAL))
+            } else if item.expanded {
+                Span::styled("▼ ", Style::default().fg(FG3))
+            } else {
+                Span::styled("▶ ", Style::default().fg(FG3))
+            };
+            spans.push(expand);
+            spans.push(Span::styled(format!("{} ", ICON_COG2), Style::default().fg(icon_color)));
+            spans.push(Span::styled(item.name.clone(), name_style));
+            let count_color = if item.count_a == item.count_b { GREEN } else { AMBER };
+            spans.push(Span::styled(
+                format!("  {}/{}", item.count_a, item.count_b),
+                Style::default().fg(count_color),
+            ));
+            spans.push(Span::styled(
+                format!("  {}", item.status),
+                Style::default().fg(status_color(&item.status)),
+            ));
+        }
+        EcsTreeItemKind::Task => {
+            // Show short task ID (last 12 chars)
+            let short_id = if item.name.len() > 12 {
+                &item.name[item.name.len() - 12..]
+            } else {
+                &item.name
+            };
+            spans.push(Span::styled("  ", Style::default()));
+            spans.push(Span::styled(format!("{} ", ICON_CUBE), Style::default().fg(icon_color)));
+            spans.push(Span::styled(short_id.to_string(), name_style));
+            if !item.launch_type.is_empty() {
+                let lt_color = if item.launch_type == "FARGATE" { BLUE } else { MAUVE };
+                spans.push(Span::styled(
+                    format!("  {}", item.launch_type),
+                    Style::default().fg(lt_color),
+                ));
+            }
+            spans.push(Span::styled(
+                format!("  {}", item.status),
+                Style::default().fg(status_color(&item.status)),
+            ));
+        }
+        EcsTreeItemKind::Container => {
+            spans.push(Span::styled("└ ", Style::default().fg(FG4)));
+            spans.push(Span::styled(item.name.clone(), name_style));
+            spans.push(Span::styled(
+                format!("  {}", item.status),
+                Style::default().fg(status_color(&item.status)),
+            ));
+        }
+    }
+
+    let mut list_item = ListItem::new(Line::from(spans));
+    if selected {
+        list_item = list_item.style(Style::default().bg(BG_HL));
+    }
+    list_item
+}
+
+fn draw_ecs_detail_panel(f: &mut Frame, area: Rect, app: &App) {
+    let cs = &app.containers_state;
+
+    if let Some(ref err) = cs.last_error {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("  ✗ {}", err),
+                Style::default().fg(RED),
+            ))),
+            area,
+        );
+        return;
+    }
+
+    let Some(item) = cs.ecs_tree.get(cs.selected_ecs_tree) else {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "  Press r to load clusters",
+                Style::default().fg(FG4),
+            ))),
+            area,
+        );
+        return;
+    };
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(3)])
+        .split(area);
+
+    // Header
+    let (header_text, header_color) = match item.kind {
+        EcsTreeItemKind::Cluster   => (format!("  {} Cluster", ICON_LAYERS), AMBER),
+        EcsTreeItemKind::Service   => (format!("  {} Service", ICON_COG2),   TEAL),
+        EcsTreeItemKind::Task      => (format!("    {} Task",  ICON_CUBE),    MAUVE),
+        EcsTreeItemKind::Container => (format!("      Container"),            GREEN),
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(header_text, Style::default().fg(header_color).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("  {}", item.name), Style::default().fg(FG2)),
+        ])),
+        rows[0],
+    );
+
+    // Detail lines
+    let mut lines: Vec<Line> = Vec::new();
+    match item.kind {
+        EcsTreeItemKind::Cluster => {
+            lines.push(detail_line("Status", &item.status, status_color(&item.status)));
+            if !item.extra.is_empty() {
+                lines.push(detail_line("Info", &item.extra, FG2));
+            }
+            if item.count_b > 0 {
+                lines.push(detail_line("Pending", &item.count_b.to_string(), AMBER));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  Enter/→ expand services  ←/Esc collapse",
+                Style::default().fg(FG4),
+            )));
+        }
+        EcsTreeItemKind::Service => {
+            lines.push(detail_line("Status", &item.status, status_color(&item.status)));
+            let count_color = if item.count_a == item.count_b { GREEN } else { AMBER };
+            lines.push(detail_line(
+                "Running",
+                &format!("{}/{}", item.count_a, item.count_b),
+                count_color,
+            ));
+            if !item.extra.is_empty() {
+                lines.push(detail_line("Task Def", &item.extra, FG2));
+            }
+            lines.push(detail_line("Cluster", &item.cluster_name, FG3));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  Enter/→ expand tasks  ←/Esc collapse",
+                Style::default().fg(FG4),
+            )));
+        }
+        EcsTreeItemKind::Task => {
+            lines.push(detail_line("Task ID", &item.name, FG2));
+            lines.push(detail_line("Status", &item.status, status_color(&item.status)));
+            if !item.launch_type.is_empty() {
+                let lt_color = if item.launch_type == "FARGATE" { BLUE } else { MAUVE };
+                lines.push(detail_line("Launch Type", &item.launch_type, lt_color));
+            }
+            if !item.extra.is_empty() {
+                lines.push(detail_line("Task Def", &item.extra, FG2));
+            }
+            lines.push(detail_line("Cluster", &item.cluster_name, FG3));
+            lines.push(detail_line("Service", &item.service_name, FG3));
+        }
+        EcsTreeItemKind::Container => {
+            lines.push(detail_line("Status", &item.status, status_color(&item.status)));
+            if !item.extra.is_empty() {
+                lines.push(detail_line("Image", &item.extra, FG2));
+            }
+            lines.push(detail_line("Service", &item.service_name, FG3));
+            lines.push(detail_line("Cluster", &item.cluster_name, FG3));
+        }
+    }
+    f.render_widget(Paragraph::new(lines), rows[1]);
+}
+
+fn detail_line(label: &str, value: &str, value_color: Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("  {:<12}", label), Style::default().fg(FG3)),
+        Span::styled(value.to_string(), Style::default().fg(value_color)),
+    ])
 }
 
 // ─── EKS body ────────────────────────────────────────────────────────────────

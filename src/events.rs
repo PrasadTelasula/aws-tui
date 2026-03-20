@@ -128,7 +128,7 @@ pub async fn handle_key_event(
             // Auto-fetch if profile available and nothing loaded yet
             let cs = &app.containers_state;
             let should_fetch = !cs.profiles.is_empty()
-                && cs.ecs_clusters.is_empty()
+                && cs.ecs_tree.is_empty()
                 && !cs.loading_ecs_clusters
                 && cs.eks_clusters.is_empty()
                 && !cs.loading_eks_clusters;
@@ -496,7 +496,7 @@ pub async fn handle_key_event(
         KeyCode::Char('1') if app.active_tab == AppTab::Containers => {
             app.containers_state.sub_tab = ContainersSubTab::Ecs;
             app.containers_state.focus = ContainersFocus::ClusterList;
-            if app.containers_state.ecs_clusters.is_empty()
+            if app.containers_state.ecs_tree.is_empty()
                 && !app.containers_state.loading_ecs_clusters
                 && !app.containers_state.profiles.is_empty()
             {
@@ -540,6 +540,14 @@ pub async fn handle_key_event(
                 }
             }
         }
+        // Left collapses ECS tree item when tree is focused
+        KeyCode::Left
+            if app.active_tab == AppTab::Containers
+                && app.containers_state.focus == ContainersFocus::ClusterList
+                && app.containers_state.sub_tab == ContainersSubTab::Ecs =>
+        {
+            app.containers_state.ecs_collapse_selected();
+        }
         // Left/Right switch ECS<->EKS when focused on sub-tab bar
         KeyCode::Left | KeyCode::Right
             if app.active_tab == AppTab::Containers
@@ -566,8 +574,15 @@ pub async fn handle_key_event(
                         }
                     }
                     ContainersFocus::ClusterList => {
-                        app.containers_state.fetch_detail_for_selected();
-                        app.containers_state.focus = ContainersFocus::DetailList;
+                        match app.containers_state.sub_tab {
+                            ContainersSubTab::Ecs => {
+                                app.containers_state.ecs_toggle_selected();
+                            }
+                            ContainersSubTab::Eks => {
+                                app.containers_state.fetch_detail_for_selected();
+                                app.containers_state.focus = ContainersFocus::DetailList;
+                            }
+                        }
                     }
                     ContainersFocus::DetailList  => {}
                 }
@@ -578,6 +593,10 @@ pub async fn handle_key_event(
                 app.containers_state.region_dropdown_open = false;
             } else if app.containers_state.focus == ContainersFocus::DetailList {
                 app.containers_state.focus = ContainersFocus::ClusterList;
+            } else if app.containers_state.focus == ContainersFocus::ClusterList
+                && app.containers_state.sub_tab == ContainersSubTab::Ecs
+            {
+                app.containers_state.ecs_collapse_selected();
             }
         }
         KeyCode::Char('r') if app.active_tab == AppTab::Containers => {

@@ -13,6 +13,7 @@ pub enum ContainersSubTab {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContainersFocus {
+    RegionList,
     ClusterList,
     DetailList,
 }
@@ -115,7 +116,7 @@ impl ContainersState {
             regions: REGIONS.iter().map(|s| s.to_string()).collect(),
             region_dropdown_open: false,
             sub_tab: ContainersSubTab::Ecs,
-            focus: ContainersFocus::ClusterList,
+            focus: ContainersFocus::RegionList,
             ecs_clusters: Vec::new(),
             selected_ecs_cluster: 0,
             loading_ecs_clusters: false,
@@ -244,8 +245,9 @@ impl ContainersState {
 
     pub fn cycle_focus(&mut self) {
         self.focus = match self.focus {
+            ContainersFocus::RegionList  => ContainersFocus::ClusterList,
             ContainersFocus::ClusterList => ContainersFocus::DetailList,
-            ContainersFocus::DetailList  => ContainersFocus::ClusterList,
+            ContainersFocus::DetailList  => ContainersFocus::RegionList,
         };
     }
 

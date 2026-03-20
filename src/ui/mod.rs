@@ -278,6 +278,14 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         AppTab::Containers => {
             use crate::containers::ContainersFocus;
             match app.containers_state.focus {
+                ContainersFocus::RegionList => {
+                    spans.push(key_span("Enter"));
+                    spans.push(desc_span(" change region  "));
+                    spans.push(key_span("Tab"));
+                    spans.push(desc_span(" focus  "));
+                    spans.push(key_span("1/2"));
+                    spans.push(desc_span(" ECS/EKS  "));
+                }
                 ContainersFocus::ClusterList => {
                     spans.push(key_span("↑↓"));
                     spans.push(desc_span(" cluster  "));

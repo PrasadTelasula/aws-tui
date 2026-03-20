@@ -2,6 +2,30 @@ use super::*;
 use crate::app::App;
 use crate::containers::{ContainersFocus, ContainersSubTab};
 
+fn draw_region_row(f: &mut Frame, area: Rect, app: &App) {
+    let cs = &app.containers_state;
+    let region_active = cs.focus == ContainersFocus::RegionList;
+    let spans = vec![
+        Span::styled(
+            if region_active { " ▸ " } else { "   " },
+            Style::default().fg(BLUE),
+        ),
+        Span::styled(format!("{} ", ICON_GLOBE), Style::default().fg(TEAL)),
+        Span::styled(
+            cs.active_region(),
+            Style::default()
+                .fg(if region_active { TEAL } else { FG2 })
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            if cs.region_dropdown_open { " ▴" } else { " ▾" },
+            Style::default().fg(FG3),
+        ),
+        Span::styled("  Enter to change", Style::default().fg(FG4)),
+    ];
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
 // Icons specific to this tab
 const ICON_CUBE: &str = "\u{f1b2}";    //  cube  (containers / EKS)
 const ICON_LAYERS: &str = "\u{f0c8}";  //  th-large (ECS services)
@@ -128,17 +152,19 @@ fn draw_ecs_body(f: &mut Frame, area: Rect, app: &App) {
     let div_area  = Rect::new(area.x + left_w,     area.y, 1,       area.height);
     let right_area= Rect::new(area.x + left_w + 1, area.y, right_w, area.height);
 
-    let div_color = if cs.focus == ContainersFocus::ClusterList { AMBER } else { FG4 };
+    let div_color = if matches!(cs.focus, ContainersFocus::RegionList | ContainersFocus::ClusterList) { AMBER } else { FG4 };
     let div_lines: Vec<Line> = (0..div_area.height)
         .map(|_| Line::from(Span::styled("│", Style::default().fg(div_color))))
         .collect();
     f.render_widget(Paragraph::new(div_lines), div_area);
 
-    // ── Left: cluster list ────────────────────────────────────────────
+    // ── Left: region selector + cluster list ──────────────────────────
     let left_rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(3)])
+        .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Min(3)])
         .split(left_area);
+
+    draw_region_row(f, left_rows[0], app);
 
     // Header
     f.render_widget(
@@ -150,7 +176,7 @@ fn draw_ecs_body(f: &mut Frame, area: Rect, app: &App) {
                 Span::styled(format!("  {}", cs.ecs_clusters.len()), Style::default().fg(FG3))
             },
         ])),
-        left_rows[0],
+        left_rows[1],
     );
 
     let cluster_focused = cs.focus == ContainersFocus::ClusterList;
@@ -203,7 +229,7 @@ fn draw_ecs_body(f: &mut Frame, area: Rect, app: &App) {
             items.push(item);
         }
     }
-    f.render_widget(List::new(items), left_rows[1]);
+    f.render_widget(List::new(items), left_rows[2]);
 
     // ── Right: service list ───────────────────────────────────────────
     let right_rows = Layout::default()
@@ -310,17 +336,19 @@ fn draw_eks_body(f: &mut Frame, area: Rect, app: &App) {
     let div_area  = Rect::new(area.x + left_w,     area.y, 1,       area.height);
     let right_area= Rect::new(area.x + left_w + 1, area.y, right_w, area.height);
 
-    let div_color = if cs.focus == ContainersFocus::ClusterList { BLUE } else { FG4 };
+    let div_color = if matches!(cs.focus, ContainersFocus::RegionList | ContainersFocus::ClusterList) { BLUE } else { FG4 };
     let div_lines: Vec<Line> = (0..div_area.height)
         .map(|_| Line::from(Span::styled("│", Style::default().fg(div_color))))
         .collect();
     f.render_widget(Paragraph::new(div_lines), div_area);
 
-    // ── Left: cluster list ────────────────────────────────────────────
+    // ── Left: region selector + cluster list ──────────────────────────
     let left_rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(3)])
+        .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Min(3)])
         .split(left_area);
+
+    draw_region_row(f, left_rows[0], app);
 
     f.render_widget(
         Paragraph::new(Line::from(vec![
@@ -331,7 +359,7 @@ fn draw_eks_body(f: &mut Frame, area: Rect, app: &App) {
                 Span::styled(format!("  {}", cs.eks_clusters.len()), Style::default().fg(FG3))
             },
         ])),
-        left_rows[0],
+        left_rows[1],
     );
 
     let cluster_focused = cs.focus == ContainersFocus::ClusterList;
@@ -375,7 +403,7 @@ fn draw_eks_body(f: &mut Frame, area: Rect, app: &App) {
             items.push(item);
         }
     }
-    f.render_widget(List::new(items), left_rows[1]);
+    f.render_widget(List::new(items), left_rows[2]);
 
     // ── Right: nodegroup list ──────────────────────────────────────────
     let right_rows = Layout::default()

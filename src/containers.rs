@@ -62,7 +62,6 @@ pub struct EcsService {
     pub status: String,
     pub desired: i64,
     pub running: i64,
-    pub pending: i64,
     pub task_definition: String,
 }
 
@@ -645,7 +644,6 @@ impl ContainersState {
                                     status:          s["status"].as_str().unwrap_or("UNKNOWN").to_string(),
                                     desired:         s["desiredCount"].as_i64().unwrap_or(0),
                                     running:         s["runningCount"].as_i64().unwrap_or(0),
-                                    pending:         s["pendingCount"].as_i64().unwrap_or(0),
                                     task_definition: td,
                                 });
                             }

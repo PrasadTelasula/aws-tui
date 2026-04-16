@@ -9,7 +9,7 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
+    host: host ?? '127.0.0.1',
     hmr: host
       ? {
           protocol: 'ws',
@@ -20,5 +20,17 @@ export default defineConfig({
     watch: {
       ignored: ['**/src-tauri/**']
     }
+  },
+  envPrefix: ['VITE_', 'TAURI_ENV_*'],
+  optimizeDeps: {
+    include: [
+      '@xterm/xterm',
+      '@xterm/addon-fit',
+      '@xterm/addon-web-links',
+      'lucide-svelte',
+      'clsx',
+      'tailwind-merge',
+      'tailwind-variants'
+    ]
   }
 });

@@ -1,22 +1,29 @@
+<script lang="ts" module>
+  import type { Snippet } from 'svelte';
+
+  export interface Column<TData> {
+    key: string;
+    header: string;
+    accessor?: (row: TData) => unknown;
+    cell?: Snippet<[TData]>;
+    sortable?: boolean;
+    sortValue?: (row: TData) => string | number;
+    filterValue?: (row: TData) => string;
+    class?: string;
+  }
+</script>
+
 <script lang="ts" generics="TData">
-  import {
-    createSvelteTable,
-    flexRender,
-    getCoreRowModel,
-    getFilteredRowModel,
-    getSortedRowModel,
-    type ColumnDef,
-    type SortingState
-  } from '@tanstack/svelte-table';
   import { cn } from '$lib/utils';
 
   interface Props {
     data: TData[];
-    columns: ColumnDef<TData, any>[];
+    columns: Column<TData>[];
     filter?: string;
     class?: string;
     emptyLabel?: string;
     onRowClick?: (row: TData) => void;
+    rowKey?: (row: TData, index: number) => string | number;
   }
 
   let {
@@ -25,88 +32,105 @@
     filter = '',
     class: className,
     emptyLabel = 'No results',
-    onRowClick
+    onRowClick,
+    rowKey
   }: Props = $props();
 
-  let sorting = $state<SortingState>([]);
+  let sortKey = $state<string | null>(null);
+  let sortDir = $state<'asc' | 'desc'>('asc');
 
-  const table = createSvelteTable<TData>({
-    get data() {
-      return data;
-    },
-    columns,
-    state: {
-      get sorting() {
-        return sorting;
-      },
-      get globalFilter() {
-        return filter;
+  function toggleSort(col: Column<TData>) {
+    if (!col.sortable) return;
+    if (sortKey === col.key) {
+      sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      sortKey = col.key;
+      sortDir = 'asc';
+    }
+  }
+
+  function defaultAccess(row: TData, key: string): unknown {
+    return (row as Record<string, unknown>)[key];
+  }
+
+  let processed = $derived.by(() => {
+    let rows = data;
+    const f = filter.trim().toLowerCase();
+    if (f) {
+      rows = rows.filter((r) =>
+        columns.some((c) => {
+          const v =
+            c.filterValue?.(r) ?? c.accessor?.(r) ?? defaultAccess(r, c.key);
+          return v != null && String(v).toLowerCase().includes(f);
+        })
+      );
+    }
+    if (sortKey) {
+      const col = columns.find((c) => c.key === sortKey);
+      if (col) {
+        const get = (r: TData) =>
+          col.sortValue?.(r) ??
+          (col.accessor?.(r) as string | number | null | undefined) ??
+          (defaultAccess(r, col.key) as string | number | null | undefined) ??
+          '';
+        rows = [...rows].sort((a, b) => {
+          const av = get(a);
+          const bv = get(b);
+          if (av === bv) return 0;
+          const cmp = av < bv ? -1 : 1;
+          return sortDir === 'asc' ? cmp : -cmp;
+        });
       }
-    },
-    onSortingChange: (updater) => {
-      sorting = typeof updater === 'function' ? updater(sorting) : updater;
-    },
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel()
+    }
+    return rows;
   });
 </script>
 
 <div class={cn('overflow-hidden rounded-lg border border-border bg-card', className)}>
   <table class="w-full text-sm">
     <thead class="bg-muted/40">
-      {#each table.getHeaderGroups() as group (group.id)}
-        <tr>
-          {#each group.headers as header (header.id)}
-            <th
-              class={cn(
-                'h-10 px-4 text-left align-middle font-medium text-muted-foreground',
-                header.column.getCanSort() && 'cursor-pointer select-none'
-              )}
-              onclick={header.column.getCanSort()
-                ? header.column.getToggleSortingHandler()
-                : undefined}
-            >
-              <div class="flex items-center gap-1.5">
-                {#if !header.isPlaceholder}
-                  <svelte:component
-                    this={flexRender(header.column.columnDef.header, header.getContext())}
-                  />
-                {/if}
-                {#if header.column.getIsSorted() === 'asc'}
-                  <span class="text-xs">↑</span>
-                {:else if header.column.getIsSorted() === 'desc'}
-                  <span class="text-xs">↓</span>
-                {/if}
-              </div>
-            </th>
-          {/each}
-        </tr>
-      {/each}
+      <tr>
+        {#each columns as col (col.key)}
+          <th
+            class={cn(
+              'h-10 px-4 text-left align-middle font-medium text-muted-foreground',
+              col.sortable && 'cursor-pointer select-none',
+              col.class
+            )}
+            onclick={() => toggleSort(col)}
+          >
+            <div class="flex items-center gap-1.5">
+              <span>{col.header}</span>
+              {#if col.sortable && sortKey === col.key}
+                <span class="text-xs">{sortDir === 'asc' ? '↑' : '↓'}</span>
+              {/if}
+            </div>
+          </th>
+        {/each}
+      </tr>
     </thead>
     <tbody>
-      {#each table.getRowModel().rows as row (row.id)}
+      {#each processed as row, i (rowKey ? rowKey(row, i) : i)}
         <tr
           class={cn(
             'border-t border-border transition-colors hover:bg-muted/40',
             onRowClick && 'cursor-pointer'
           )}
-          onclick={() => onRowClick?.(row.original)}
+          onclick={() => onRowClick?.(row)}
         >
-          {#each row.getVisibleCells() as cell (cell.id)}
-            <td class="px-4 py-2.5 align-middle">
-              <svelte:component
-                this={flexRender(cell.column.columnDef.cell, cell.getContext())}
-              />
+          {#each columns as col (col.key)}
+            <td class={cn('px-4 py-2.5 align-middle', col.class)}>
+              {#if col.cell}
+                {@render col.cell(row)}
+              {:else}
+                <span>{(col.accessor?.(row) ?? defaultAccess(row, col.key) ?? '—') as string}</span>
+              {/if}
             </td>
           {/each}
         </tr>
       {:else}
         <tr>
-          <td
-            colspan={columns.length}
-            class="py-10 text-center text-sm text-muted-foreground"
-          >
+          <td colspan={columns.length} class="py-10 text-center text-sm text-muted-foreground">
             {emptyLabel}
           </td>
         </tr>

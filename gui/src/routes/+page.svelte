@@ -1,15 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { createRawSnippet } from 'svelte';
   import { ipc } from '$lib/ipc';
   import type { Alias, SessionState, SessionStatus } from '$lib/types';
   import { aliases, sessions, loading } from '$lib/stores/aws';
   import PageHeader from '$lib/components/app-shell/page-header.svelte';
-  import DataTable from '$lib/components/data-table.svelte';
+  import DataTable, { type Column } from '$lib/components/data-table.svelte';
   import StatusDot from '$lib/components/status-dot.svelte';
   import { Badge, Button, Input, Kbd } from '$lib/components/ui';
   import { Play, RefreshCw, Search, Square } from 'lucide-svelte';
-  import type { ColumnDef } from '@tanstack/svelte-table';
 
   let filter = $state('');
 
@@ -58,62 +56,16 @@
     }
   }
 
-  const columns: ColumnDef<Alias, any>[] = [
-    {
-      accessorKey: 'name',
-      header: 'Alias',
-      cell: (ctx) =>
-        createRawSnippet(() => ({
-          render: () => `<span class="font-mono text-sm font-medium">${ctx.getValue()}</span>`
-        }))
-    },
-    {
-      accessorKey: 'kind',
-      header: 'Kind',
-      cell: (ctx) => {
-        const kind = ctx.getValue() as Alias['kind'];
-        const variant = kindBadgeVariant(kind);
-        return createRawSnippet(() => ({
-          render: () =>
-            `<span class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium bg-status-${
-              variant === 'muted' ? 'info' : variant
-            }/15 text-status-${variant === 'muted' ? 'info' : variant}">${kind}</span>`
-        }));
-      }
-    },
-    {
-      accessorKey: 'profile',
-      header: 'Profile',
-      cell: (ctx) =>
-        createRawSnippet(() => ({
-          render: () =>
-            `<span class="font-mono text-xs text-muted-foreground">${ctx.getValue() ?? '—'}</span>`
-        }))
-    },
-    {
-      accessorKey: 'region',
-      header: 'Region',
-      cell: (ctx) =>
-        createRawSnippet(() => ({
-          render: () =>
-            `<span class="font-mono text-xs text-muted-foreground">${ctx.getValue() ?? '—'}</span>`
-        }))
-    },
-    {
-      id: 'status',
-      header: 'Status',
-      cell: (ctx) => {
-        const a = ctx.row.original as Alias;
-        const s = $sessions[a.name]?.state ?? 'idle';
-        const tone = stateTone(s);
-        return createRawSnippet(() => ({
-          render: () =>
-            `<span class="inline-flex items-center gap-2 text-xs"><span class="h-2 w-2 rounded-full bg-status-${
-              tone === 'muted' ? 'info' : tone
-            }"></span><span class="capitalize">${s}</span></span>`
-        }));
-      }
-    }
+  let visible = $derived(
+    $aliases.filter((a) => !filter || a.name.toLowerCase().includes(filter.toLowerCase()))
+  );
+
+  const columns: Column<Alias>[] = [
+    { key: 'name', header: 'Alias', sortable: true, accessor: (r) => r.name },
+    { key: 'kind', header: 'Kind', sortable: true, accessor: (r) => r.kind },
+    { key: 'profile', header: 'Profile', sortable: true, accessor: (r) => r.profile ?? '' },
+    { key: 'region', header: 'Region', sortable: true, accessor: (r) => r.region ?? '' },
+    { key: 'status', header: 'Status' }
   ];
 </script>
 
@@ -144,11 +96,12 @@
     data={$aliases}
     {columns}
     {filter}
+    rowKey={(r) => r.name}
     emptyLabel={$loading.aliases ? 'Loading aliases…' : 'No aliases found'}
   />
 
   <div class="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-    {#each $aliases.filter((a) => !filter || a.name.toLowerCase().includes(filter.toLowerCase())) as alias (alias.name)}
+    {#each visible as alias (alias.name)}
       {@const st = $sessions[alias.name]}
       {@const active = st?.state === 'active' || st?.state === 'starting'}
       <div class="rounded-lg border border-border bg-card p-4 transition-colors hover:border-primary/40">

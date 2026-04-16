@@ -19,6 +19,7 @@
         entry.href === '/'
           ? $page.url.pathname === '/'
           : $page.url.pathname.startsWith(entry.href)}
+      {@const Icon = entry.icon}
       <a
         href={entry.href}
         class={cn(
@@ -28,7 +29,7 @@
             : 'text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground'
         )}
       >
-        <svelte:component this={entry.icon} class="h-4 w-4" />
+        <Icon class="h-4 w-4" />
         <span>{entry.label}</span>
       </a>
     {/each}

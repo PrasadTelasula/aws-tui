@@ -1,14 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { createRawSnippet } from 'svelte';
   import { ipc } from '$lib/ipc';
   import { instances, loading, profile, region } from '$lib/stores/aws';
   import type { Instance } from '$lib/types';
   import PageHeader from '$lib/components/app-shell/page-header.svelte';
-  import DataTable from '$lib/components/data-table.svelte';
+  import DataTable, { type Column } from '$lib/components/data-table.svelte';
   import { Badge, Button, Input } from '$lib/components/ui';
   import { RefreshCw, Search } from 'lucide-svelte';
-  import type { ColumnDef } from '@tanstack/svelte-table';
 
   let filter = $state('');
   let selected = $state<Instance | null>(null);
@@ -37,63 +35,13 @@
     return 'muted';
   }
 
-  const columns: ColumnDef<Instance, any>[] = [
-    {
-      accessorKey: 'id',
-      header: 'Instance ID',
-      cell: (ctx) =>
-        createRawSnippet(() => ({
-          render: () => `<span class="font-mono text-xs">${ctx.getValue()}</span>`
-        }))
-    },
-    {
-      accessorKey: 'name',
-      header: 'Name',
-      cell: (ctx) =>
-        createRawSnippet(() => ({
-          render: () => `<span class="text-sm">${ctx.getValue() ?? '—'}</span>`
-        }))
-    },
-    {
-      accessorKey: 'state',
-      header: 'State',
-      cell: (ctx) => {
-        const s = ctx.getValue() as string;
-        const tone = stateBadge(s);
-        return createRawSnippet(() => ({
-          render: () =>
-            `<span class="inline-flex items-center gap-1.5 text-xs"><span class="h-1.5 w-1.5 rounded-full bg-status-${
-              tone === 'muted' ? 'info' : tone
-            }"></span><span class="capitalize">${s}</span></span>`
-        }));
-      }
-    },
-    {
-      accessorKey: 'instanceType',
-      header: 'Type',
-      cell: (ctx) =>
-        createRawSnippet(() => ({
-          render: () => `<span class="font-mono text-xs">${ctx.getValue()}</span>`
-        }))
-    },
-    {
-      accessorKey: 'privateIp',
-      header: 'Private IP',
-      cell: (ctx) =>
-        createRawSnippet(() => ({
-          render: () =>
-            `<span class="font-mono text-xs text-muted-foreground">${ctx.getValue() ?? '—'}</span>`
-        }))
-    },
-    {
-      accessorKey: 'az',
-      header: 'AZ',
-      cell: (ctx) =>
-        createRawSnippet(() => ({
-          render: () =>
-            `<span class="font-mono text-xs text-muted-foreground">${ctx.getValue() ?? '—'}</span>`
-        }))
-    }
+  const columns: Column<Instance>[] = [
+    { key: 'id', header: 'Instance ID', sortable: true, accessor: (r) => r.id },
+    { key: 'name', header: 'Name', sortable: true, accessor: (r) => r.name ?? '' },
+    { key: 'state', header: 'State', sortable: true, accessor: (r) => r.state },
+    { key: 'instanceType', header: 'Type', sortable: true, accessor: (r) => r.instanceType },
+    { key: 'privateIp', header: 'Private IP', accessor: (r) => r.privateIp ?? '' },
+    { key: 'az', header: 'AZ', accessor: (r) => r.az ?? '' }
   ];
 </script>
 
@@ -122,6 +70,7 @@
       data={$instances}
       {columns}
       {filter}
+      rowKey={(r) => r.id}
       onRowClick={select}
       emptyLabel={$loading.instances ? 'Loading…' : 'No instances'}
     />

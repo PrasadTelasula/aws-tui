@@ -1,39 +1,58 @@
+use crate::config::{self, AppConfig, AppState};
 use crate::model::*;
+use crate::parser;
 use std::collections::HashMap;
-
-// NOTE: Phase 1 scaffold. Most commands return stubbed sample data so the UI
-// can be built and wired end-to-end. Real implementations should bridge into
-// the existing `aws-tui` modules (parser.rs, session.rs, instances.rs,
-// containers.rs) — extraction into an `aws-tui-core` library is the next step.
+use tauri::State;
 
 #[tauri::command]
-pub async fn list_aliases(_path: Option<String>) -> Result<Vec<Alias>, String> {
-    Ok(vec![
-        Alias {
-            name: "sso-prod".into(),
-            command: "aws sso login --profile prod".into(),
-            kind: AliasKind::SsoLogin,
-            profile: Some("prod".into()),
-            region: None,
-            target: None,
-        },
-        Alias {
-            name: "ssm-db-prod".into(),
-            command: "aws ssm start-session --target i-0abc --document-name AWS-StartPortForwardingSession".into(),
-            kind: AliasKind::SsmSession,
-            profile: Some("prod".into()),
-            region: Some("us-east-1".into()),
-            target: Some("i-0abc".into()),
-        },
-        Alias {
-            name: "sso-dev".into(),
-            command: "aws sso login --profile dev".into(),
-            kind: AliasKind::SsoLogin,
-            profile: Some("dev".into()),
-            region: None,
-            target: None,
-        },
-    ])
+pub async fn list_aliases(
+    path: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<AliasesResponse, String> {
+    let resolved = if path.is_some() {
+        path.clone()
+    } else {
+        state.config.lock().unwrap().aliases_path.clone()
+    };
+
+    let (loaded_path, aliases) = parser::read_aliases(resolved.as_deref())?;
+
+    if path.is_some() {
+        let mut cfg = state.config.lock().unwrap();
+        cfg.aliases_path = Some(loaded_path.to_string_lossy().into_owned());
+        let snapshot = cfg.clone();
+        drop(cfg);
+        let _ = config::save(&snapshot);
+    }
+
+    Ok(AliasesResponse {
+        path: loaded_path.to_string_lossy().into_owned(),
+        aliases,
+    })
+}
+
+#[tauri::command]
+pub async fn get_config(state: State<'_, AppState>) -> Result<AppConfig, String> {
+    Ok(state.config.lock().unwrap().clone())
+}
+
+#[tauri::command]
+pub async fn set_aliases_path(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<AliasesResponse, String> {
+    let (loaded_path, aliases) = parser::read_aliases(Some(&path))?;
+    {
+        let mut cfg = state.config.lock().unwrap();
+        cfg.aliases_path = Some(loaded_path.to_string_lossy().into_owned());
+        let snapshot = cfg.clone();
+        drop(cfg);
+        config::save(&snapshot)?;
+    }
+    Ok(AliasesResponse {
+        path: loaded_path.to_string_lossy().into_owned(),
+        aliases,
+    })
 }
 
 #[tauri::command]
@@ -64,7 +83,10 @@ pub async fn list_sessions() -> Result<Vec<SessionStatus>, String> {
 }
 
 #[tauri::command]
-pub async fn list_instances(_profile: Option<String>, _region: Option<String>) -> Result<Vec<Instance>, String> {
+pub async fn list_instances(
+    _profile: Option<String>,
+    _region: Option<String>,
+) -> Result<Vec<Instance>, String> {
     let mut tags = HashMap::new();
     tags.insert("Environment".into(), "production".into());
     tags.insert("Owner".into(), "platform".into());
@@ -105,57 +127,55 @@ pub async fn describe_instance(id: String) -> Result<serde_json::Value, String> 
 }
 
 #[tauri::command]
-pub async fn list_clusters(_profile: Option<String>, _region: Option<String>) -> Result<Vec<Cluster>, String> {
-    Ok(vec![
-        Cluster {
-            name: "prod-cluster".into(),
-            arn: "arn:aws:ecs:us-east-1:123:cluster/prod-cluster".into(),
-            status: "ACTIVE".into(),
-            running_tasks: 12,
-            services_count: 5,
-        },
-    ])
+pub async fn list_clusters(
+    _profile: Option<String>,
+    _region: Option<String>,
+) -> Result<Vec<Cluster>, String> {
+    Ok(vec![Cluster {
+        name: "prod-cluster".into(),
+        arn: "arn:aws:ecs:us-east-1:123:cluster/prod-cluster".into(),
+        status: "ACTIVE".into(),
+        running_tasks: 12,
+        services_count: 5,
+    }])
 }
 
 #[tauri::command]
 pub async fn list_services(cluster: String) -> Result<Vec<Service>, String> {
-    Ok(vec![
-        Service {
-            name: "api".into(),
-            arn: format!("arn:aws:ecs:us-east-1:123:service/{}/api", cluster),
-            cluster: cluster.clone(),
-            status: "ACTIVE".into(),
-            desired: 3,
-            running: 3,
-        },
-    ])
+    Ok(vec![Service {
+        name: "api".into(),
+        arn: format!("arn:aws:ecs:us-east-1:123:service/{}/api", cluster),
+        cluster: cluster.clone(),
+        status: "ACTIVE".into(),
+        desired: 3,
+        running: 3,
+    }])
 }
 
 #[tauri::command]
-pub async fn list_tasks(cluster: String, service: Option<String>) -> Result<Vec<Task>, String> {
-    Ok(vec![
-        Task {
-            arn: format!("arn:aws:ecs:us-east-1:123:task/{}/abc123", cluster),
-            cluster,
-            service,
-            last_status: "RUNNING".into(),
-            desired_status: "RUNNING".into(),
-            launch_type: "FARGATE".into(),
-        },
-    ])
+pub async fn list_tasks(
+    cluster: String,
+    service: Option<String>,
+) -> Result<Vec<Task>, String> {
+    Ok(vec![Task {
+        arn: format!("arn:aws:ecs:us-east-1:123:task/{}/abc123", cluster),
+        cluster,
+        service,
+        last_status: "RUNNING".into(),
+        desired_status: "RUNNING".into(),
+        launch_type: "FARGATE".into(),
+    }])
 }
 
 #[tauri::command]
 pub async fn list_containers(_task_arn: String) -> Result<Vec<Container>, String> {
-    Ok(vec![
-        Container {
-            name: "app".into(),
-            task_arn: "arn:aws:ecs:us-east-1:123:task/prod/abc123".into(),
-            image: "123.dkr.ecr.us-east-1.amazonaws.com/app:latest".into(),
-            last_status: "RUNNING".into(),
-            health: Some("HEALTHY".into()),
-        },
-    ])
+    Ok(vec![Container {
+        name: "app".into(),
+        task_arn: "arn:aws:ecs:us-east-1:123:task/prod/abc123".into(),
+        image: "123.dkr.ecr.us-east-1.amazonaws.com/app:latest".into(),
+        last_status: "RUNNING".into(),
+        health: Some("HEALTHY".into()),
+    }])
 }
 
 #[tauri::command]

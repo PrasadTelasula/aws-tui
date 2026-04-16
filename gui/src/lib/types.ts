@@ -9,6 +9,15 @@ export interface Alias {
   target: string | null;
 }
 
+export interface AliasesResponse {
+  path: string;
+  aliases: Alias[];
+}
+
+export interface AppConfig {
+  aliasesPath: string | null;
+}
+
 export type SessionState = 'idle' | 'starting' | 'active' | 'expired' | 'error';
 
 export interface SessionStatus {

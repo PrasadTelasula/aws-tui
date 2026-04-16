@@ -22,6 +22,13 @@ pub enum AliasKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AliasesResponse {
+    pub path: String,
+    pub aliases: Vec<Alias>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionStatus {
     pub alias: String,
     pub state: SessionState,

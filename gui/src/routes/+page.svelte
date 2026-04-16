@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { ipc } from '$lib/ipc';
   import type { Alias, SessionState, SessionStatus } from '$lib/types';
-  import { aliases, sessions, loading } from '$lib/stores/aws';
+  import { aliases, aliasesPath, sessions, loading } from '$lib/stores/aws';
   import PageHeader from '$lib/components/app-shell/page-header.svelte';
   import DataTable, { type Column } from '$lib/components/data-table.svelte';
   import StatusDot from '$lib/components/status-dot.svelte';
@@ -11,15 +11,22 @@
 
   let filter = $state('');
 
+  let loadError = $state<string | null>(null);
+
   async function refresh() {
     loading.update((l) => ({ ...l, aliases: true }));
+    loadError = null;
     try {
-      const list = await ipc.listAliases();
-      aliases.set(list);
+      const resp = await ipc.listAliases();
+      aliases.set(resp.aliases);
+      aliasesPath.set(resp.path);
       const s = await ipc.listSessions();
       const byAlias: Record<string, SessionStatus> = {};
       for (const st of s) byAlias[st.alias] = st;
       sessions.set(byAlias);
+    } catch (e) {
+      loadError = String(e);
+      aliases.set([]);
     } finally {
       loading.update((l) => ({ ...l, aliases: false }));
     }
@@ -72,7 +79,9 @@
 <div class="space-y-4">
   <PageHeader
     title="Sessions"
-    subtitle="Start, stop, and monitor AWS SSO, SSM, and IAM sessions defined in your shell aliases."
+    subtitle={$aliasesPath
+      ? `Loaded from ${$aliasesPath}`
+      : 'Start, stop, and monitor AWS SSO, SSM, and IAM sessions defined in your shell aliases.'}
   >
     {#snippet actions()}
       <Button variant="outline" size="sm" onclick={refresh} disabled={$loading.aliases}>
@@ -81,6 +90,12 @@
       </Button>
     {/snippet}
   </PageHeader>
+
+  {#if loadError}
+    <div class="rounded-md border border-status-error/30 bg-status-error/10 px-3 py-2 text-sm text-status-error">
+      {loadError}
+    </div>
+  {/if}
 
   <div class="flex items-center gap-2">
     <div class="relative flex-1 max-w-sm">

@@ -1,9 +1,10 @@
 <script lang="ts">
   import { page } from '$app/stores';
   import { navEntries } from '$lib/nav';
-  import { profile, region } from '$lib/stores/aws';
+  import { profile, region, aliasesPath, aliases } from '$lib/stores/aws';
+  import { ipc } from '$lib/ipc';
   import { Badge, Input } from '$lib/components/ui';
-  import { Moon, Sun } from 'lucide-svelte';
+  import { FolderOpen, Moon, Sun } from 'lucide-svelte';
 
   let current = $derived(
     navEntries.find((e) =>
@@ -17,6 +18,25 @@
     dark = !dark;
     document.documentElement.classList.toggle('dark', dark);
   }
+
+  async function pickFile() {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      title: 'Select aliases file',
+      filters: [
+        { name: 'Shell aliases', extensions: ['sh', 'bash', 'zsh', 'aliases', 'txt'] },
+        { name: 'All files', extensions: ['*'] }
+      ]
+    });
+    if (typeof selected !== 'string') return;
+    const resp = await ipc.setAliasesPath(selected);
+    aliasesPath.set(resp.path);
+    aliases.set(resp.aliases);
+  }
+
+  let basename = $derived($aliasesPath ? $aliasesPath.split(/[\\/]/).pop() : null);
 </script>
 
 <header
@@ -32,6 +52,16 @@
   </div>
 
   <div class="app-chrome-no-drag flex items-center gap-3">
+    <button
+      type="button"
+      onclick={pickFile}
+      title={$aliasesPath ?? 'No aliases file loaded'}
+      class="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-background px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+    >
+      <FolderOpen class="h-3.5 w-3.5" />
+      <span class="font-mono">{basename ?? 'Load aliases…'}</span>
+    </button>
+
     <div class="flex items-center gap-2 text-xs">
       <Badge variant="muted">Profile</Badge>
       <Input class="h-8 w-28 font-mono text-xs" bind:value={$profile} spellcheck={false} />

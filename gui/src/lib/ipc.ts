@@ -8,6 +8,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
   Alias,
+  AliasesResponse,
+  AppConfig,
   Cluster,
   Container,
   Instance,
@@ -17,7 +19,11 @@ import type {
 } from './types';
 
 export const ipc = {
-  listAliases: (path?: string) => invoke<Alias[]>('list_aliases', { path }),
+  listAliases: (path?: string) =>
+    invoke<AliasesResponse>('list_aliases', { path }),
+  setAliasesPath: (path: string) =>
+    invoke<AliasesResponse>('set_aliases_path', { path }),
+  getConfig: () => invoke<AppConfig>('get_config'),
   startSession: (alias: string) => invoke<SessionStatus>('start_session', { alias }),
   stopSession: (alias: string) => invoke<SessionStatus>('stop_session', { alias }),
   listSessions: () => invoke<SessionStatus[]>('list_sessions'),

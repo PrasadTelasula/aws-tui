@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import { tick } from 'svelte';
+  import type { UnlistenFn } from '@tauri-apps/api/event';
   import { ipc } from '$lib/ipc';
   import type { Alias, SessionState, SessionStatus } from '$lib/types';
   import { aliases, aliasesPath, sessions, loading } from '$lib/stores/aws';
@@ -7,11 +9,15 @@
   import DataTable, { type Column } from '$lib/components/data-table.svelte';
   import StatusDot from '$lib/components/status-dot.svelte';
   import { Badge, Button, Input, Kbd } from '$lib/components/ui';
-  import { Play, RefreshCw, Search, Square } from 'lucide-svelte';
+  import { Play, RefreshCw, Search, Square, Terminal as TermIcon, X } from 'lucide-svelte';
 
   let filter = $state('');
-
   let loadError = $state<string | null>(null);
+  let viewing = $state<string | null>(null);
+  let viewingLines = $state<string[]>([]);
+  let outputBox: HTMLDivElement | null = $state(null);
+
+  const unlistens: Map<string, UnlistenFn[]> = new Map();
 
   async function refresh() {
     loading.update((l) => ({ ...l, aliases: true }));
@@ -34,14 +40,67 @@
 
   onMount(refresh);
 
+  onDestroy(() => {
+    for (const fns of unlistens.values()) for (const fn of fns) fn();
+    unlistens.clear();
+  });
+
+  async function attachListeners(alias: string) {
+    if (unlistens.has(alias)) return;
+    const onOut = await ipc.onSessionOutput(alias, (line) => {
+      if (viewing === alias) {
+        viewingLines = [...viewingLines, line].slice(-500);
+        scrollOutputToBottom();
+      }
+    });
+    const onStat = await ipc.onSessionStatus(alias, (status) => {
+      sessions.update((s) => ({ ...s, [alias]: status }));
+    });
+    unlistens.set(alias, [onOut, onStat]);
+  }
+
+  function detachListeners(alias: string) {
+    const fns = unlistens.get(alias);
+    if (fns) {
+      for (const fn of fns) fn();
+      unlistens.delete(alias);
+    }
+  }
+
   async function start(a: Alias) {
-    const status = await ipc.startSession(a.name);
-    sessions.update((s) => ({ ...s, [a.name]: status }));
+    await attachListeners(a.name);
+    try {
+      const status = await ipc.startSession(a.name, a.command);
+      sessions.update((s) => ({ ...s, [a.name]: status }));
+    } catch (e) {
+      loadError = `Failed to start ${a.name}: ${e}`;
+    }
   }
 
   async function stop(a: Alias) {
-    const status = await ipc.stopSession(a.name);
-    sessions.update((s) => ({ ...s, [a.name]: status }));
+    try {
+      const status = await ipc.stopSession(a.name);
+      sessions.update((s) => ({ ...s, [a.name]: status }));
+    } finally {
+      detachListeners(a.name);
+    }
+  }
+
+  async function viewOutput(a: Alias) {
+    viewing = a.name;
+    viewingLines = await ipc.sessionOutput(a.name);
+    await attachListeners(a.name);
+    await tick();
+    scrollOutputToBottom();
+  }
+
+  function closeOutput() {
+    viewing = null;
+    viewingLines = [];
+  }
+
+  function scrollOutputToBottom() {
+    if (outputBox) outputBox.scrollTop = outputBox.scrollHeight;
   }
 
   function stateTone(s: SessionState | undefined): 'ok' | 'warn' | 'error' | 'info' | 'muted' {
@@ -132,18 +191,64 @@
           <div class="flex items-center gap-2 text-xs text-muted-foreground">
             {#if alias.profile}<span class="font-mono">{alias.profile}</span>{/if}
             {#if alias.region}<span class="font-mono">· {alias.region}</span>{/if}
+            {#if st?.pid}<span class="font-mono">· pid {st.pid}</span>{/if}
           </div>
-          {#if active}
-            <Button variant="destructive" size="sm" onclick={() => stop(alias)}>
-              <Square class="h-3.5 w-3.5" /> Stop
-            </Button>
-          {:else}
-            <Button size="sm" onclick={() => start(alias)}>
-              <Play class="h-3.5 w-3.5" /> Start
-            </Button>
-          {/if}
+          <div class="flex items-center gap-1.5">
+            {#if active}
+              <Button variant="ghost" size="sm" onclick={() => viewOutput(alias)}>
+                <TermIcon class="h-3.5 w-3.5" />
+              </Button>
+              <Button variant="destructive" size="sm" onclick={() => stop(alias)}>
+                <Square class="h-3.5 w-3.5" /> Stop
+              </Button>
+            {:else}
+              <Button size="sm" onclick={() => start(alias)}>
+                <Play class="h-3.5 w-3.5" /> Start
+              </Button>
+            {/if}
+          </div>
         </div>
       </div>
     {/each}
   </div>
 </div>
+
+{#if viewing}
+  <div
+    role="dialog"
+    aria-modal="true"
+    class="fixed inset-0 z-50 flex items-end justify-center bg-black/40 backdrop-blur-sm sm:items-center sm:p-4"
+    onclick={closeOutput}
+  >
+    <div
+      class="flex h-[70vh] w-full max-w-3xl flex-col overflow-hidden rounded-t-lg border border-border bg-card shadow-xl sm:rounded-lg"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <div class="flex items-center justify-between border-b border-border px-4 py-2.5">
+        <div class="flex items-center gap-2">
+          <TermIcon class="h-4 w-4 text-primary" />
+          <span class="font-mono text-sm font-medium">{viewing}</span>
+          <Badge variant={stateTone($sessions[viewing]?.state)}>
+            {$sessions[viewing]?.state ?? 'idle'}
+          </Badge>
+        </div>
+        <button
+          onclick={closeOutput}
+          class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+          aria-label="Close"
+        >
+          <X class="h-4 w-4" />
+        </button>
+      </div>
+      <div bind:this={outputBox} class="min-h-0 flex-1 overflow-auto bg-[#0f1114] p-3 font-mono text-xs text-[#d4d4d4]">
+        {#if viewingLines.length === 0}
+          <span class="text-muted-foreground italic">(no output yet)</span>
+        {:else}
+          {#each viewingLines as line, i (i)}
+            <div class="whitespace-pre-wrap leading-relaxed">{line}</div>
+          {/each}
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}

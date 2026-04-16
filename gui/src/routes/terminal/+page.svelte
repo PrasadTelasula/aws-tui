@@ -1,12 +1,21 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { get } from 'svelte/store';
   import PageHeader from '$lib/components/app-shell/page-header.svelte';
   import { Badge, Button } from '$lib/components/ui';
   import { TerminalSquare, X } from 'lucide-svelte';
+  import { ipc } from '$lib/ipc';
+  import { profile, region } from '$lib/stores/aws';
 
   let container: HTMLDivElement;
   let term: any = null;
   let fit: any = null;
+  let unlistenData: (() => void) | null = null;
+  let unlistenExit: (() => void) | null = null;
+  let connected = $state(false);
+  let error = $state<string | null>(null);
+
+  const ptyId = `term-${Math.random().toString(36).slice(2, 10)}`;
 
   onMount(async () => {
     const { Terminal } = await import('@xterm/xterm');
@@ -17,15 +26,15 @@
       fontFamily: 'var(--font-mono)',
       fontSize: 13,
       theme: {
-        background: 'rgba(0,0,0,0)',
+        background: '#0f1114',
         foreground: '#d4d4d4',
         cursor: '#ed8936',
-        cursorAccent: '#1a1a1a',
+        cursorAccent: '#0f1114',
         selectionBackground: 'rgba(237, 137, 54, 0.3)'
       },
       cursorBlink: true,
-      allowTransparency: true,
-      scrollback: 5000
+      scrollback: 10000,
+      convertEol: true
     });
 
     fit = new FitAddon();
@@ -34,28 +43,32 @@
     term.open(container);
     fit.fit();
 
-    term.writeln('\x1b[1;33mAWS TUI — embedded terminal\x1b[0m');
-    term.writeln('PTY backend not yet wired. Type freely to test the UI.');
-    term.writeln('');
-    term.write('\x1b[1;32m$\x1b[0m ');
+    try {
+      unlistenData = await ipc.onPtyData(ptyId, (chunk) => term.write(chunk));
+      unlistenExit = await ipc.onPtyExit(ptyId, () => {
+        connected = false;
+        term.writeln('\r\n\x1b[1;31m[process exited]\x1b[0m');
+      });
 
-    let buf = '';
-    term.onData((data: string) => {
-      if (data === '\r') {
-        term.writeln('');
-        if (buf.trim()) term.writeln(`\x1b[90m(would run: ${buf})\x1b[0m`);
-        buf = '';
-        term.write('\x1b[1;32m$\x1b[0m ');
-      } else if (data === '\u007f') {
-        if (buf.length > 0) {
-          buf = buf.slice(0, -1);
-          term.write('\b \b');
-        }
-      } else {
-        buf += data;
-        term.write(data);
-      }
-    });
+      await ipc.ptyOpen(ptyId, {
+        rows: term.rows,
+        cols: term.cols,
+        profile: get(profile),
+        region: get(region)
+      });
+      connected = true;
+
+      term.onData((data: string) => {
+        if (connected) ipc.ptyWrite(ptyId, data).catch(() => {});
+      });
+
+      term.onResize(({ rows, cols }: { rows: number; cols: number }) => {
+        if (connected) ipc.ptyResize(ptyId, rows, cols).catch(() => {});
+      });
+    } catch (e) {
+      error = String(e);
+      term.writeln(`\x1b[1;31m${error}\x1b[0m`);
+    }
 
     const onResize = () => fit?.fit();
     window.addEventListener('resize', onResize);
@@ -63,6 +76,9 @@
   });
 
   onDestroy(() => {
+    unlistenData?.();
+    unlistenExit?.();
+    if (connected) ipc.ptyClose(ptyId).catch(() => {});
     term?.dispose();
   });
 
@@ -74,10 +90,12 @@
 <div class="flex h-full flex-col gap-4">
   <PageHeader
     title="Terminal"
-    subtitle="Embedded shell with AWS CLI autocomplete (PTY backend coming soon)."
+    subtitle="Embedded shell with AWS_PROFILE and AWS_REGION pre-set."
   >
     {#snippet actions()}
-      <Badge variant="warn">PTY backend TODO</Badge>
+      <Badge variant={connected ? 'ok' : 'muted'}>
+        {connected ? 'connected' : 'disconnected'}
+      </Badge>
       <Button variant="outline" size="sm" onclick={clearTerm}>
         <X class="h-3.5 w-3.5" /> Clear
       </Button>
@@ -89,7 +107,7 @@
   >
     <div class="flex items-center gap-2 border-b border-white/5 px-2 py-1.5 text-xs text-white/60">
       <TerminalSquare class="h-3.5 w-3.5" />
-      <span class="font-mono">bash · default · us-east-1</span>
+      <span class="font-mono">pty · {$profile} · {$region}</span>
     </div>
     <div bind:this={container} class="min-h-0 flex-1 p-2"></div>
   </div>

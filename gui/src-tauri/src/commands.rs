@@ -56,33 +56,6 @@ pub async fn set_aliases_path(
 }
 
 #[tauri::command]
-pub async fn start_session(alias: String) -> Result<SessionStatus, String> {
-    Ok(SessionStatus {
-        alias,
-        state: SessionState::Starting,
-        pid: None,
-        started_at: Some(chrono::Utc::now().to_rfc3339()),
-        expires_at: None,
-    })
-}
-
-#[tauri::command]
-pub async fn stop_session(alias: String) -> Result<SessionStatus, String> {
-    Ok(SessionStatus {
-        alias,
-        state: SessionState::Idle,
-        pid: None,
-        started_at: None,
-        expires_at: None,
-    })
-}
-
-#[tauri::command]
-pub async fn list_sessions() -> Result<Vec<SessionStatus>, String> {
-    Ok(vec![])
-}
-
-#[tauri::command]
 pub async fn list_instances(
     _profile: Option<String>,
     _region: Option<String>,

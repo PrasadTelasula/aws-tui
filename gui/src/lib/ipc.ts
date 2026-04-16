@@ -6,6 +6,7 @@
  * commands stays discoverable and typed in one place.
  */
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
   Alias,
   AliasesResponse,
@@ -18,20 +19,36 @@ import type {
   Task
 } from './types';
 
+export interface PtyOpenOpts {
+  shell?: string;
+  cwd?: string;
+  rows?: number;
+  cols?: number;
+  profile?: string;
+  region?: string;
+}
+
 export const ipc = {
-  listAliases: (path?: string) =>
-    invoke<AliasesResponse>('list_aliases', { path }),
-  setAliasesPath: (path: string) =>
-    invoke<AliasesResponse>('set_aliases_path', { path }),
+  // -------- aliases / config --------
+  listAliases: (path?: string) => invoke<AliasesResponse>('list_aliases', { path }),
+  setAliasesPath: (path: string) => invoke<AliasesResponse>('set_aliases_path', { path }),
   getConfig: () => invoke<AppConfig>('get_config'),
-  startSession: (alias: string) => invoke<SessionStatus>('start_session', { alias }),
+
+  // -------- sessions --------
+  startSession: (alias: string, command: string) =>
+    invoke<SessionStatus>('start_session', { alias, command }),
   stopSession: (alias: string) => invoke<SessionStatus>('stop_session', { alias }),
   listSessions: () => invoke<SessionStatus[]>('list_sessions'),
+  sessionOutput: (alias: string) => invoke<string[]>('session_output', { alias }),
+  onSessionOutput: (alias: string, cb: (line: string) => void) =>
+    listen<string>(`session://${alias}/output`, (e) => cb(e.payload)),
+  onSessionStatus: (alias: string, cb: (s: SessionStatus) => void) =>
+    listen<SessionStatus>(`session://${alias}/status`, (e) => cb(e.payload)),
 
+  // -------- AWS browsers --------
   listInstances: (profile?: string, region?: string) =>
     invoke<Instance[]>('list_instances', { profile, region }),
   describeInstance: (id: string) => invoke<unknown>('describe_instance', { id }),
-
   listClusters: (profile?: string, region?: string) =>
     invoke<Cluster[]>('list_clusters', { profile, region }),
   listServices: (cluster: string) => invoke<Service[]>('list_services', { cluster }),
@@ -42,7 +59,18 @@ export const ipc = {
 
   completeAwsCli: (line: string, cursor: number) =>
     invoke<string[]>('complete_aws_cli', { line, cursor }),
-  awsWhoami: (profile?: string) => invoke<unknown>('aws_whoami', { profile })
+  awsWhoami: (profile?: string) => invoke<unknown>('aws_whoami', { profile }),
+
+  // -------- pty --------
+  ptyOpen: (id: string, opts: PtyOpenOpts = {}) => invoke<void>('pty_open', { id, ...opts }),
+  ptyWrite: (id: string, data: string) => invoke<void>('pty_write', { id, data }),
+  ptyResize: (id: string, rows: number, cols: number) =>
+    invoke<void>('pty_resize', { id, rows, cols }),
+  ptyClose: (id: string) => invoke<void>('pty_close', { id }),
+  onPtyData: (id: string, cb: (chunk: string) => void): Promise<UnlistenFn> =>
+    listen<string>(`pty://${id}/data`, (e) => cb(e.payload)),
+  onPtyExit: (id: string, cb: () => void): Promise<UnlistenFn> =>
+    listen<void>(`pty://${id}/exit`, () => cb())
 };
 
 export type Ipc = typeof ipc;

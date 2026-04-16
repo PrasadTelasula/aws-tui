@@ -1,23 +1,51 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import { tick } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import type { UnlistenFn } from '@tauri-apps/api/event';
   import { ipc } from '$lib/ipc';
-  import type { Alias, SessionState, SessionStatus } from '$lib/types';
+  import type { Alias, SessionStatus } from '$lib/types';
   import { aliases, aliasesPath, sessions, loading } from '$lib/stores/aws';
+  import {
+    groupAliases,
+    isActive,
+    kindBadgeVariant,
+    kindLabel,
+    outputLineClass,
+    portHint,
+    stateLabel,
+    stateTone
+  } from '$lib/sessions-helpers';
+  import { formatDuration, uptimeFrom } from '$lib/utils';
   import PageHeader from '$lib/components/app-shell/page-header.svelte';
-  import DataTable, { type Column } from '$lib/components/data-table.svelte';
   import StatusDot from '$lib/components/status-dot.svelte';
+  import CredentialsModal from '$lib/components/credentials-modal.svelte';
+  import ConfirmModal from '$lib/components/confirm-modal.svelte';
   import { Badge, Button, Input, Kbd } from '$lib/components/ui';
-  import { Play, RefreshCw, Search, Square, Terminal as TermIcon, X } from 'lucide-svelte';
+  import {
+    KeyRound,
+    Play,
+    PowerOff,
+    RefreshCw,
+    Search,
+    Square,
+    Terminal as TermIcon,
+    X,
+    ChevronDown,
+    ChevronRight
+  } from 'lucide-svelte';
 
   let filter = $state('');
   let loadError = $state<string | null>(null);
   let viewing = $state<string | null>(null);
   let viewingLines = $state<string[]>([]);
   let outputBox: HTMLDivElement | null = $state(null);
+  let credentialsFor = $state<string | null>(null);
+  let confirmStopAll = $state(false);
+  let collapsed = $state<Record<string, boolean>>({});
+  let now = $state(Date.now());
 
   const unlistens: Map<string, UnlistenFn[]> = new Map();
+  let unlistenChanged: UnlistenFn | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   async function refresh() {
     loading.update((l) => ({ ...l, aliases: true }));
@@ -26,10 +54,8 @@
       const resp = await ipc.listAliases();
       aliases.set(resp.aliases);
       aliasesPath.set(resp.path);
-      const s = await ipc.listSessions();
-      const byAlias: Record<string, SessionStatus> = {};
-      for (const st of s) byAlias[st.alias] = st;
-      sessions.set(byAlias);
+      await syncSessions();
+      verifyExistingInBackground(resp.aliases);
     } catch (e) {
       loadError = String(e);
       aliases.set([]);
@@ -38,11 +64,42 @@
     }
   }
 
-  onMount(refresh);
+  async function syncSessions() {
+    const list = await ipc.listSessions();
+    const byAlias: Record<string, SessionStatus> = {};
+    for (const st of list) byAlias[st.alias] = st;
+    sessions.set(byAlias);
+  }
+
+  async function verifyExistingInBackground(list: Alias[]) {
+    const ssoPairs: Array<[string, string]> = list
+      .filter((a) => a.kind === 'sso-login' && a.ssoSessionName)
+      .map((a) => [a.name, a.ssoSessionName!]);
+    const iamPairs: Array<[string, string]> = list
+      .filter((a) => a.kind === 'iam-profile')
+      .map((a) => [a.name, a.name]);
+    try {
+      if (ssoPairs.length) await ipc.checkExistingSso(ssoPairs);
+      if (iamPairs.length) await ipc.checkExistingIam(iamPairs);
+    } catch (e) {
+      console.warn('startup verification failed', e);
+    }
+    await syncSessions();
+  }
+
+  onMount(async () => {
+    await refresh();
+    unlistenChanged = await ipc.onSessionsChanged(() => syncSessions());
+    pollTimer = setInterval(() => {
+      now = Date.now();
+    }, 1000);
+  });
 
   onDestroy(() => {
     for (const fns of unlistens.values()) for (const fn of fns) fn();
     unlistens.clear();
+    unlistenChanged?.();
+    if (pollTimer) clearInterval(pollTimer);
   });
 
   async function attachListeners(alias: string) {
@@ -70,7 +127,13 @@
   async function start(a: Alias) {
     await attachListeners(a.name);
     try {
-      const status = await ipc.startSession(a.name, a.command);
+      const status = await ipc.startSession(
+        a.name,
+        a.command,
+        a.kind,
+        a.ssoSessionName,
+        a.profile
+      );
       sessions.update((s) => ({ ...s, [a.name]: status }));
     } catch (e) {
       loadError = `Failed to start ${a.name}: ${e}`;
@@ -103,46 +166,69 @@
     if (outputBox) outputBox.scrollTop = outputBox.scrollHeight;
   }
 
-  function stateTone(s: SessionState | undefined): 'ok' | 'warn' | 'error' | 'info' | 'muted' {
-    switch (s) {
-      case 'active': return 'ok';
-      case 'starting': return 'info';
-      case 'expired': return 'warn';
-      case 'error': return 'error';
-      default: return 'muted';
+  async function doStopAll() {
+    confirmStopAll = false;
+    try {
+      const n = await ipc.stopAllSessions();
+      loadError = null;
+      console.log(`Stopped ${n} session(s)`);
+      await syncSessions();
+    } catch (e) {
+      loadError = `stop-all failed: ${e}`;
     }
   }
 
-  function kindBadgeVariant(k: Alias['kind']): 'info' | 'ok' | 'warn' | 'muted' {
-    switch (k) {
-      case 'sso-login': return 'info';
-      case 'ssm-session': return 'ok';
-      case 'iam-profile': return 'warn';
-      default: return 'muted';
-    }
+  function toggleGroup(name: string) {
+    collapsed = { ...collapsed, [name]: !collapsed[name] };
   }
 
-  let visible = $derived(
-    $aliases.filter((a) => !filter || a.name.toLowerCase().includes(filter.toLowerCase()))
+  function matchesFilter(a: Alias): boolean {
+    if (!filter) return true;
+    const f = filter.toLowerCase();
+    return (
+      a.name.toLowerCase().includes(f) ||
+      (a.profile?.toLowerCase().includes(f) ?? false) ||
+      (a.region?.toLowerCase().includes(f) ?? false) ||
+      (a.subgroup?.toLowerCase().includes(f) ?? false) ||
+      (a.group?.toLowerCase().includes(f) ?? false) ||
+      a.command.toLowerCase().includes(f)
+    );
+  }
+
+  let groups = $derived(
+    groupAliases($aliases.filter(matchesFilter))
   );
 
-  const columns: Column<Alias>[] = [
-    { key: 'name', header: 'Alias', sortable: true, accessor: (r) => r.name },
-    { key: 'kind', header: 'Kind', sortable: true, accessor: (r) => r.kind },
-    { key: 'profile', header: 'Profile', sortable: true, accessor: (r) => r.profile ?? '' },
-    { key: 'region', header: 'Region', sortable: true, accessor: (r) => r.region ?? '' },
-    { key: 'status', header: 'Status' }
-  ];
+  let runningCount = $derived(
+    Object.values($sessions).filter((s) => isActive(s)).length
+  );
+
+  function expiryHint(s: SessionStatus | undefined): string | null {
+    if (!s) return null;
+    if (s.tokenRemainingSecs == null) return null;
+    if (s.tokenRemainingSecs === 0) return 'expired';
+    return `expires in ${formatDuration(s.tokenRemainingSecs)}`;
+  }
+
+  function uptime(s: SessionStatus | undefined): string {
+    void now;
+    return uptimeFrom(s?.startedAt ?? null);
+  }
 </script>
 
 <div class="space-y-4">
   <PageHeader
     title="Sessions"
     subtitle={$aliasesPath
-      ? `Loaded from ${$aliasesPath}`
+      ? `Loaded from ${$aliasesPath} · ${runningCount} active`
       : 'Start, stop, and monitor AWS SSO, SSM, and IAM sessions defined in your shell aliases.'}
   >
     {#snippet actions()}
+      {#if runningCount > 0}
+        <Button variant="outline" size="sm" onclick={() => (confirmStopAll = true)}>
+          <PowerOff class="h-3.5 w-3.5" /> Stop all ({runningCount})
+        </Button>
+      {/if}
       <Button variant="outline" size="sm" onclick={refresh} disabled={$loading.aliases}>
         <RefreshCw class={'h-3.5 w-3.5 ' + ($loading.aliases ? 'animate-spin' : '')} />
         Refresh
@@ -162,52 +248,118 @@
       <Input class="pl-8" placeholder="Filter aliases…" bind:value={filter} />
     </div>
     <span class="text-xs text-muted-foreground">
-      <Kbd>/</Kbd> to focus
+      {$aliases.length} alias{$aliases.length === 1 ? '' : 'es'}
     </span>
   </div>
 
-  <DataTable
-    data={$aliases}
-    {columns}
-    {filter}
-    rowKey={(r) => r.name}
-    emptyLabel={$loading.aliases ? 'Loading aliases…' : 'No aliases found'}
-  />
+  <div class="space-y-5">
+    {#each groups as g (g.name)}
+      {@const isCollapsed = collapsed[g.name]}
+      <section>
+        <button
+          type="button"
+          onclick={() => toggleGroup(g.name)}
+          class="flex w-full items-center gap-2 py-1 text-left"
+        >
+          {#if isCollapsed}
+            <ChevronRight class="h-4 w-4 text-muted-foreground" />
+          {:else}
+            <ChevronDown class="h-4 w-4 text-muted-foreground" />
+          {/if}
+          <h3 class="text-sm font-semibold tracking-tight">{g.name}</h3>
+          <span class="text-xs text-muted-foreground">
+            · {g.subgroups.reduce((acc, sg) => acc + sg.aliases.length, 0)}
+          </span>
+        </button>
 
-  <div class="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-    {#each visible as alias (alias.name)}
-      {@const st = $sessions[alias.name]}
-      {@const active = st?.state === 'active' || st?.state === 'starting'}
-      <div class="rounded-lg border border-border bg-card p-4 transition-colors hover:border-primary/40">
-        <div class="flex items-center justify-between gap-2">
-          <div class="flex items-center gap-2">
-            <StatusDot tone={stateTone(st?.state)} pulse={st?.state === 'starting'} />
-            <span class="font-mono text-sm font-medium">{alias.name}</span>
+        {#if !isCollapsed}
+          <div class="mt-2 space-y-4">
+            {#each g.subgroups as sg (sg.name)}
+              <div>
+                <div class="mb-2 flex items-center gap-2 px-1 text-xs uppercase tracking-wider text-muted-foreground">
+                  <span>{sg.name}</span>
+                  <span class="h-px flex-1 bg-border"></span>
+                </div>
+                <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {#each sg.aliases as alias (alias.name)}
+                    {@const st = $sessions[alias.name]}
+                    {@const active = isActive(st)}
+                    {@const port = portHint(alias)}
+                    {@const exp = expiryHint(st)}
+                    <div class="rounded-lg border border-border bg-card p-4 transition-colors hover:border-primary/40">
+                      <div class="flex items-center justify-between gap-2">
+                        <div class="flex min-w-0 items-center gap-2">
+                          <StatusDot
+                            tone={stateTone(st?.state)}
+                            pulse={st?.state === 'starting'}
+                          />
+                          <span class="truncate font-mono text-sm font-medium">{alias.name}</span>
+                        </div>
+                        <Badge variant={kindBadgeVariant(alias.kind)}>{kindLabel(alias.kind)}</Badge>
+                      </div>
+
+                      {#if port}
+                        <p class="mt-2 truncate font-mono text-xs text-muted-foreground">{port}</p>
+                      {:else}
+                        <p class="mt-2 line-clamp-2 font-mono text-xs text-muted-foreground">{alias.command}</p>
+                      {/if}
+
+                      <div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                        <span class="capitalize">{stateLabel(st?.state)}</span>
+                        {#if st?.pid}<span class="font-mono">· pid {st.pid}</span>{/if}
+                        {#if active}<span>· up {uptime(st)}</span>{/if}
+                        {#if alias.profile}<span class="font-mono">· {alias.profile}</span>{/if}
+                        {#if alias.region}<span class="font-mono">· {alias.region}</span>{/if}
+                        {#if exp}
+                          <span class={st?.tokenRemainingSecs === 0 ? 'text-status-warn' : ''}>
+                            · {exp}
+                          </span>
+                        {/if}
+                      </div>
+
+                      {#if st?.errorMessage}
+                        <p class="mt-2 truncate text-xs text-status-error" title={st.errorMessage}>
+                          {st.errorMessage}
+                        </p>
+                      {/if}
+
+                      <div class="mt-3 flex items-center justify-end gap-1.5">
+                        {#if st?.hasCredentials}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onclick={() => (credentialsFor = alias.name)}
+                          >
+                            <KeyRound class="h-3.5 w-3.5" /> Creds
+                          </Button>
+                        {/if}
+                        {#if active || (st?.output ?? false)}
+                          <Button variant="ghost" size="sm" onclick={() => viewOutput(alias)}>
+                            <TermIcon class="h-3.5 w-3.5" />
+                          </Button>
+                        {/if}
+                        {#if active}
+                          <Button variant="destructive" size="sm" onclick={() => stop(alias)}>
+                            <Square class="h-3.5 w-3.5" /> Stop
+                          </Button>
+                        {:else}
+                          <Button size="sm" onclick={() => start(alias)}>
+                            <Play class="h-3.5 w-3.5" />
+                            {st?.state === 'expired' ? 'Re-login' : 'Start'}
+                          </Button>
+                        {/if}
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/each}
           </div>
-          <Badge variant={kindBadgeVariant(alias.kind)}>{alias.kind}</Badge>
-        </div>
-        <p class="mt-2 line-clamp-2 text-xs text-muted-foreground font-mono">{alias.command}</p>
-        <div class="mt-3 flex items-center justify-between">
-          <div class="flex items-center gap-2 text-xs text-muted-foreground">
-            {#if alias.profile}<span class="font-mono">{alias.profile}</span>{/if}
-            {#if alias.region}<span class="font-mono">· {alias.region}</span>{/if}
-            {#if st?.pid}<span class="font-mono">· pid {st.pid}</span>{/if}
-          </div>
-          <div class="flex items-center gap-1.5">
-            {#if active}
-              <Button variant="ghost" size="sm" onclick={() => viewOutput(alias)}>
-                <TermIcon class="h-3.5 w-3.5" />
-              </Button>
-              <Button variant="destructive" size="sm" onclick={() => stop(alias)}>
-                <Square class="h-3.5 w-3.5" /> Stop
-              </Button>
-            {:else}
-              <Button size="sm" onclick={() => start(alias)}>
-                <Play class="h-3.5 w-3.5" /> Start
-              </Button>
-            {/if}
-          </div>
-        </div>
+        {/if}
+      </section>
+    {:else}
+      <div class="rounded-lg border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
+        {$loading.aliases ? 'Loading aliases…' : filter ? 'No aliases match your filter' : 'No aliases'}
       </div>
     {/each}
   </div>
@@ -229,8 +381,13 @@
           <TermIcon class="h-4 w-4 text-primary" />
           <span class="font-mono text-sm font-medium">{viewing}</span>
           <Badge variant={stateTone($sessions[viewing]?.state)}>
-            {$sessions[viewing]?.state ?? 'idle'}
+            {stateLabel($sessions[viewing]?.state)}
           </Badge>
+          {#if $sessions[viewing]?.pid}
+            <span class="font-mono text-xs text-muted-foreground">
+              pid {$sessions[viewing]?.pid}
+            </span>
+          {/if}
         </div>
         <button
           onclick={closeOutput}
@@ -240,15 +397,34 @@
           <X class="h-4 w-4" />
         </button>
       </div>
-      <div bind:this={outputBox} class="min-h-0 flex-1 overflow-auto bg-[#0f1114] p-3 font-mono text-xs text-[#d4d4d4]">
+      <div bind:this={outputBox} class="min-h-0 flex-1 overflow-auto bg-[#0f1114] p-3 font-mono text-xs">
         {#if viewingLines.length === 0}
-          <span class="text-muted-foreground italic">(no output yet)</span>
+          <span class="italic text-muted-foreground">(no output yet)</span>
         {:else}
           {#each viewingLines as line, i (i)}
-            <div class="whitespace-pre-wrap leading-relaxed">{line}</div>
+            <div class={'whitespace-pre-wrap leading-relaxed ' + outputLineClass(line)}>{line}</div>
           {/each}
         {/if}
       </div>
     </div>
   </div>
+{/if}
+
+{#if credentialsFor}
+  <CredentialsModal
+    alias={credentialsFor}
+    status={$sessions[credentialsFor]}
+    onClose={() => (credentialsFor = null)}
+  />
+{/if}
+
+{#if confirmStopAll}
+  <ConfirmModal
+    title="Stop all sessions"
+    message={`Stop ${runningCount} active session${runningCount === 1 ? '' : 's'}? Running processes will be terminated and SSO logins dismissed.`}
+    confirmLabel="Stop all"
+    danger
+    onConfirm={doStopAll}
+    onCancel={() => (confirmStopAll = false)}
+  />
 {/if}

@@ -9,8 +9,10 @@ static ALIAS_RE: OnceLock<Regex> = OnceLock::new();
 static GROUP_RE: OnceLock<Regex> = OnceLock::new();
 static SSO_SESSION_RE: OnceLock<Regex> = OnceLock::new();
 static SSM_TARGET_RE: OnceLock<Regex> = OnceLock::new();
-static SSM_PROFILE_RE: OnceLock<Regex> = OnceLock::new();
-static SSM_REGION_RE: OnceLock<Regex> = OnceLock::new();
+static PROFILE_RE: OnceLock<Regex> = OnceLock::new();
+static REGION_RE: OnceLock<Regex> = OnceLock::new();
+static SSM_DOC_RE: OnceLock<Regex> = OnceLock::new();
+static SSM_PARAMS_RE: OnceLock<Regex> = OnceLock::new();
 
 fn alias_re() -> &'static Regex {
     ALIAS_RE.get_or_init(|| {
@@ -26,6 +28,7 @@ fn group_re() -> &'static Regex {
 
 pub fn parse(content: &str) -> Vec<Alias> {
     let mut out = Vec::new();
+    let mut group: Option<String> = None;
     let mut subgroup: Option<String> = None;
 
     for raw in content.lines() {
@@ -34,6 +37,7 @@ pub fn parse(content: &str) -> Vec<Alias> {
             continue;
         }
         if let Some(caps) = group_re().captures(line) {
+            group = Some(caps[1].trim().to_string());
             subgroup = caps.get(2).map(|m| m.as_str().trim().to_string());
             continue;
         }
@@ -52,13 +56,29 @@ pub fn parse(content: &str) -> Vec<Alias> {
             } else {
                 classify(&command)
             };
+            let ssm_params = if matches!(kind, AliasKind::SsmSession) {
+                extract_ssm_params(&command)
+            } else {
+                SsmParams::default()
+            };
             out.push(Alias {
-                name,
                 profile: extract_profile(&command),
                 region: extract_region(&command),
                 target: extract_target(&command),
+                sso_session_name: if matches!(kind, AliasKind::SsoLogin) {
+                    extract_sso_session(&command)
+                } else {
+                    None
+                },
+                ssm_document: ssm_params.document,
+                ssm_local_port: ssm_params.local_port,
+                ssm_remote_port: ssm_params.remote_port,
+                ssm_host: ssm_params.host,
+                name,
                 command,
                 kind,
+                group: group.clone(),
+                subgroup: subgroup.clone(),
             });
         }
     }
@@ -76,25 +96,48 @@ fn classify(command: &str) -> AliasKind {
 }
 
 fn extract_target(command: &str) -> Option<String> {
-    let re = SSM_TARGET_RE.get_or_init(|| Regex::new(r"--target\s+(\S+)").unwrap());
-    re.captures(command).map(|c| c[1].trim_matches('"').to_string())
-}
-
-fn extract_profile(command: &str) -> Option<String> {
-    let re = SSM_PROFILE_RE.get_or_init(|| {
-        Regex::new(r"--profile\s+(\S+)|--sso-session\s+(\S+)").unwrap()
-    });
-    re.captures(command).and_then(|c| {
-        c.get(1).or_else(|| c.get(2)).map(|m| m.as_str().to_string())
-    })
-}
-
-fn extract_region(command: &str) -> Option<String> {
-    let re = SSM_REGION_RE.get_or_init(|| Regex::new(r"--region\s+(\S+)").unwrap());
+    let re = SSM_TARGET_RE.get_or_init(|| Regex::new(r#"--target\s+"?([^"\s]+)"?"#).unwrap());
     re.captures(command).map(|c| c[1].to_string())
 }
 
-#[allow(dead_code)]
+fn extract_profile(command: &str) -> Option<String> {
+    let re = PROFILE_RE.get_or_init(|| Regex::new(r"--profile\s+(\S+)").unwrap());
+    re.captures(command).map(|c| c[1].to_string())
+}
+
+fn extract_region(command: &str) -> Option<String> {
+    let re = REGION_RE.get_or_init(|| Regex::new(r"--region\s+(\S+)").unwrap());
+    re.captures(command).map(|c| c[1].to_string())
+}
+
+fn extract_sso_session(command: &str) -> Option<String> {
+    let re = SSO_SESSION_RE.get_or_init(|| Regex::new(r"--sso-session\s+(\S+)").unwrap());
+    re.captures(command).map(|c| c[1].to_string())
+}
+
+#[derive(Default)]
+struct SsmParams {
+    document: Option<String>,
+    local_port: Option<String>,
+    remote_port: Option<String>,
+    host: Option<String>,
+}
+
+fn extract_ssm_params(command: &str) -> SsmParams {
+    let doc_re = SSM_DOC_RE.get_or_init(|| Regex::new(r"--document-name\s+(\S+)").unwrap());
+    let params_re = SSM_PARAMS_RE.get_or_init(|| Regex::new(r"--parameters\s+(.+)$").unwrap());
+
+    let mut out = SsmParams::default();
+    out.document = doc_re.captures(command).map(|c| c[1].to_string());
+    if let Some(p) = params_re.captures(command) {
+        let parsed = parse_ssm_parameters(&p[1]);
+        out.local_port = parsed.get("localPortNumber").and_then(|v| v.first()).cloned();
+        out.remote_port = parsed.get("portNumber").and_then(|v| v.first()).cloned();
+        out.host = parsed.get("host").and_then(|v| v.first()).cloned();
+    }
+    out
+}
+
 fn parse_ssm_parameters(params_str: &str) -> HashMap<String, Vec<String>> {
     let cleaned = params_str
         .replace('\\', "")
@@ -123,11 +166,6 @@ fn parse_ssm_parameters(params_str: &str) -> HashMap<String, Vec<String>> {
     result
 }
 
-/// Resolution order:
-///   1. Explicit `path` argument (e.g. file picker)
-///   2. AWS_TUI_ALIASES env var
-///   3. ~/.zsh_aliases, ~/.bash_aliases, ~/.aliases
-///   4. Bundled ./sample_aliases (relative to CWD or app dir)
 pub fn resolve_path(explicit: Option<&str>) -> Option<PathBuf> {
     if let Some(p) = explicit {
         let pb = PathBuf::from(p);

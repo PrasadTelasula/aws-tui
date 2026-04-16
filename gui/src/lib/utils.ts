@@ -21,3 +21,24 @@ export function formatRelative(iso: string | null | undefined): string {
 export function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
 }
+
+export function formatDuration(secs: number): string {
+  if (secs < 0) return '0s';
+  if (secs < 60) return `${Math.floor(secs)}s`;
+  if (secs < 3600) {
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    return s ? `${m}m ${s}s` : `${m}m`;
+  }
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
+export function uptimeFrom(iso: string | null): string {
+  if (!iso) return '—';
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return '—';
+  const secs = Math.max(0, (Date.now() - t) / 1000);
+  return formatDuration(secs);
+}

@@ -9,10 +9,12 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
   Alias,
+  AliasKind,
   AliasesResponse,
   AppConfig,
   Cluster,
   Container,
+  CredentialInfo,
   Instance,
   Service,
   SessionStatus,
@@ -35,15 +37,36 @@ export const ipc = {
   getConfig: () => invoke<AppConfig>('get_config'),
 
   // -------- sessions --------
-  startSession: (alias: string, command: string) =>
-    invoke<SessionStatus>('start_session', { alias, command }),
+  startSession: (
+    alias: string,
+    command: string,
+    kind: AliasKind,
+    ssoSessionName?: string | null,
+    profileName?: string | null
+  ) =>
+    invoke<SessionStatus>('start_session', {
+      alias,
+      command,
+      kind,
+      ssoSessionName: ssoSessionName ?? null,
+      profileName: profileName ?? null
+    }),
   stopSession: (alias: string) => invoke<SessionStatus>('stop_session', { alias }),
+  stopAllSessions: () => invoke<number>('stop_all_sessions'),
   listSessions: () => invoke<SessionStatus[]>('list_sessions'),
   sessionOutput: (alias: string) => invoke<string[]>('session_output', { alias }),
+  getCredentials: (alias: string) =>
+    invoke<CredentialInfo | null>('get_credentials', { alias }),
+  checkExistingSso: (aliases: Array<[string, string]>) =>
+    invoke<SessionStatus[]>('check_existing_sso', { aliases }),
+  checkExistingIam: (aliases: Array<[string, string]>) =>
+    invoke<SessionStatus[]>('check_existing_iam', { aliases }),
   onSessionOutput: (alias: string, cb: (line: string) => void) =>
     listen<string>(`session://${alias}/output`, (e) => cb(e.payload)),
   onSessionStatus: (alias: string, cb: (s: SessionStatus) => void) =>
     listen<SessionStatus>(`session://${alias}/status`, (e) => cb(e.payload)),
+  onSessionsChanged: (cb: () => void) =>
+    listen<void>('sessions://changed', () => cb()),
 
   // -------- AWS browsers --------
   listInstances: (profile?: string, region?: string) =>

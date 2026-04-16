@@ -4,9 +4,16 @@ export interface Alias {
   name: string;
   command: string;
   kind: AliasKind;
+  group: string | null;
+  subgroup: string | null;
   profile: string | null;
   region: string | null;
   target: string | null;
+  ssoSessionName: string | null;
+  ssmDocument: string | null;
+  ssmLocalPort: string | null;
+  ssmRemotePort: string | null;
+  ssmHost: string | null;
 }
 
 export interface AliasesResponse {
@@ -18,14 +25,33 @@ export interface AppConfig {
   aliasesPath: string | null;
 }
 
-export type SessionState = 'idle' | 'starting' | 'active' | 'expired' | 'error';
+export type SessionState =
+  | 'stopped'
+  | 'starting'
+  | 'running'
+  | 'connected'
+  | 'expired'
+  | 'error';
 
 export interface SessionStatus {
   alias: string;
   state: SessionState;
   pid: number | null;
   startedAt: string | null;
-  expiresAt: string | null;
+  errorMessage: string | null;
+  ssoProfile: string | null;
+  identityArn: string | null;
+  identityAccount: string | null;
+  tokenExpiresAt: string | null;
+  tokenRemainingSecs: number | null;
+  hasCredentials: boolean;
+}
+
+export interface CredentialInfo {
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken: string;
+  expiration: string;
 }
 
 export interface Instance {

@@ -1,3 +1,4 @@
+mod aws;
 mod commands;
 mod config;
 mod model;
@@ -37,8 +38,12 @@ pub fn run() {
             commands::aws_whoami,
             sessions::start_session,
             sessions::stop_session,
+            sessions::stop_all_sessions,
             sessions::list_sessions,
             sessions::session_output,
+            sessions::get_credentials,
+            sessions::check_existing_sso,
+            sessions::check_existing_iam,
             pty::pty_open,
             pty::pty_write,
             pty::pty_resize,

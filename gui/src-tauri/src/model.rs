@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -6,12 +7,19 @@ pub struct Alias {
     pub name: String,
     pub command: String,
     pub kind: AliasKind,
+    pub group: Option<String>,
+    pub subgroup: Option<String>,
     pub profile: Option<String>,
     pub region: Option<String>,
     pub target: Option<String>,
+    pub sso_session_name: Option<String>,
+    pub ssm_document: Option<String>,
+    pub ssm_local_port: Option<String>,
+    pub ssm_remote_port: Option<String>,
+    pub ssm_host: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum AliasKind {
     SsoLogin,
@@ -27,6 +35,17 @@ pub struct AliasesResponse {
     pub aliases: Vec<Alias>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionState {
+    Stopped,
+    Starting,
+    Running,
+    Connected,
+    Expired,
+    Error,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionStatus {
@@ -34,17 +53,40 @@ pub struct SessionStatus {
     pub state: SessionState,
     pub pid: Option<u32>,
     pub started_at: Option<String>,
-    pub expires_at: Option<String>,
+    pub error_message: Option<String>,
+    pub sso_profile: Option<String>,
+    pub identity_arn: Option<String>,
+    pub identity_account: Option<String>,
+    pub token_expires_at: Option<String>,
+    pub token_remaining_secs: Option<u64>,
+    pub has_credentials: bool,
+}
+
+impl SessionStatus {
+    pub fn stopped(alias: &str) -> Self {
+        Self {
+            alias: alias.to_string(),
+            state: SessionState::Stopped,
+            pid: None,
+            started_at: None,
+            error_message: None,
+            sso_profile: None,
+            identity_arn: None,
+            identity_account: None,
+            token_expires_at: None,
+            token_remaining_secs: None,
+            has_credentials: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SessionState {
-    Idle,
-    Starting,
-    Active,
-    Expired,
-    Error,
+#[serde(rename_all = "camelCase")]
+pub struct CredentialInfo {
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: String,
+    pub expiration: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,7 +100,7 @@ pub struct Instance {
     pub public_ip: Option<String>,
     pub az: Option<String>,
     pub vpc_id: Option<String>,
-    pub tags: std::collections::HashMap<String, String>,
+    pub tags: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

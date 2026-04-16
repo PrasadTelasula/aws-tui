@@ -1,0 +1,184 @@
+/*
+ * Global stylesheet — single source of truth for:
+ *   1. Font loading (see $lib/fonts)
+ *   2. Design tokens (CSS custom properties on :root and .dark)
+ *   3. Typography scale
+ *   4. Tailwind layer integration
+ *
+ * DO NOT import fonts or define --font-* / --text-* variables anywhere else.
+ * Components MUST use `font-sans` / `font-mono` Tailwind classes, never
+ * hard-coded `font-family` values.
+ */
+
+/* ---- Font loading: all fonts are loaded here, nowhere else ---- */
+@import '@fontsource-variable/inter/wght.css';
+@import '@fontsource-variable/inter/wght-italic.css';
+@import '@fontsource-variable/jetbrains-mono/wght.css';
+@import '@fontsource-variable/jetbrains-mono/wght-italic.css';
+
+@import '@xterm/xterm/css/xterm.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ---------------- Typography ---------------- */
+    --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system,
+      'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo,
+      Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+
+    --text-xs: 0.75rem;
+    --text-sm: 0.8125rem;
+    --text-base: 0.875rem;
+    --text-lg: 1rem;
+    --text-xl: 1.125rem;
+    --text-2xl: 1.375rem;
+    --leading-xs: 1rem;
+    --leading-sm: 1.125rem;
+    --leading-base: 1.25rem;
+    --leading-lg: 1.5rem;
+    --leading-xl: 1.625rem;
+    --leading-2xl: 1.875rem;
+
+    /* ---------------- Color tokens — light ---------------- */
+    --background: 0 0% 100%;
+    --foreground: 222 20% 12%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 20% 12%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 20% 12%;
+
+    --primary: 28 92% 48%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 222 20% 20%;
+
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 46%;
+
+    --accent: 220 14% 96%;
+    --accent-foreground: 222 20% 20%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 28 92% 48%;
+
+    --sidebar-background: 220 14% 98%;
+    --sidebar-foreground: 222 20% 20%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-accent: 220 14% 94%;
+    --sidebar-accent-foreground: 222 20% 15%;
+
+    --status-ok: 142 70% 40%;
+    --status-warn: 38 92% 50%;
+    --status-error: 0 72% 51%;
+    --status-info: 217 91% 60%;
+
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    /* ---------------- Color tokens — dark ---------------- */
+    --background: 222 22% 8%;
+    --foreground: 220 14% 92%;
+
+    --card: 222 20% 11%;
+    --card-foreground: 220 14% 92%;
+
+    --popover: 222 20% 11%;
+    --popover-foreground: 220 14% 92%;
+
+    --primary: 28 92% 56%;
+    --primary-foreground: 222 20% 8%;
+
+    --secondary: 222 16% 16%;
+    --secondary-foreground: 220 14% 92%;
+
+    --muted: 222 16% 16%;
+    --muted-foreground: 220 9% 64%;
+
+    --accent: 222 16% 16%;
+    --accent-foreground: 220 14% 92%;
+
+    --destructive: 0 62% 48%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 222 16% 18%;
+    --input: 222 16% 18%;
+    --ring: 28 92% 56%;
+
+    --sidebar-background: 222 24% 7%;
+    --sidebar-foreground: 220 14% 88%;
+    --sidebar-border: 222 16% 16%;
+    --sidebar-accent: 222 20% 13%;
+    --sidebar-accent-foreground: 220 14% 96%;
+
+    --status-ok: 142 65% 48%;
+    --status-warn: 38 92% 56%;
+    --status-error: 0 72% 58%;
+    --status-info: 217 91% 65%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body {
+    @apply h-full;
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  code,
+  kbd,
+  pre,
+  samp,
+  .font-mono {
+    font-family: var(--font-mono);
+    font-feature-settings: 'calt', 'ss02';
+  }
+
+  /* Scrollbar styling — consistent across all scroll surfaces */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground));
+    background-clip: padding-box;
+    border: 2px solid transparent;
+  }
+}
+
+@layer components {
+  .app-chrome-drag {
+    -webkit-app-region: drag;
+    app-region: drag;
+  }
+  .app-chrome-no-drag {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+}

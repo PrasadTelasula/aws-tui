@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "gui/src-tauri"]
+
 [package]
 name = "aws-tui"
 version = "0.1.0"

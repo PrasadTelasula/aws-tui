@@ -1,48 +1,28 @@
 <script lang="ts">
-  import { onMount, onDestroy, tick } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import type { UnlistenFn } from '@tauri-apps/api/event';
   import { ipc } from '$lib/ipc';
   import type { Alias, SessionStatus } from '$lib/types';
   import { aliases, aliasesPath, sessions, loading } from '$lib/stores/aws';
-  import {
-    groupAliases,
-    isActive,
-    kindBadgeVariant,
-    kindLabel,
-    outputLineClass,
-    portHint,
-    stateLabel,
-    stateTone,
-    subgroupIcon
-  } from '$lib/sessions-helpers';
-  import { formatDuration, uptimeFrom } from '$lib/utils';
-  import PageHeader from '$lib/components/app-shell/page-header.svelte';
-  import StatusDot from '$lib/components/status-dot.svelte';
+  import { groupAliases, isActive } from '$lib/sessions-helpers';
+  import type { AliasGroup } from '$lib/sessions-helpers';
+  import { flatten } from '$lib/components/sessions/session-list.svelte';
+  import SessionList from '$lib/components/sessions/session-list.svelte';
+  import SessionDetail from '$lib/components/sessions/session-detail.svelte';
   import CredentialsModal from '$lib/components/credentials-modal.svelte';
   import ConfirmModal from '$lib/components/confirm-modal.svelte';
-  import { Badge, Button, Input, Kbd } from '$lib/components/ui';
-  import {
-    KeyRound,
-    Play,
-    PowerOff,
-    RefreshCw,
-    Search,
-    Square,
-    Terminal as TermIcon,
-    X,
-    ChevronDown,
-    ChevronRight
-  } from 'lucide-svelte';
+  import { Button, Kbd } from '$lib/components/ui';
+  import { PowerOff, RefreshCw } from 'lucide-svelte';
 
   let filter = $state('');
   let loadError = $state<string | null>(null);
-  let viewing = $state<string | null>(null);
-  let viewingLines = $state<string[]>([]);
-  let outputBox: HTMLDivElement | null = $state(null);
+  let selectedAlias = $state<string | null>(null);
+  let selectedOutput = $state<string[]>([]);
   let credentialsFor = $state<string | null>(null);
   let confirmStopAll = $state(false);
   let collapsed = $state<Record<string, boolean>>({});
   let now = $state(Date.now());
+  let searchInput: HTMLInputElement | undefined = $state();
 
   const unlistens: Map<string, UnlistenFn[]> = new Map();
   let unlistenChanged: UnlistenFn | null = null;
@@ -78,7 +58,7 @@
       .map((a) => [a.name, a.ssoSessionName!]);
     const iamPairs: Array<[string, string]> = list
       .filter((a) => a.kind === 'iam-profile')
-      .map((a) => [a.name, a.name]);
+      .map((a) => [a.name, a.profile ?? a.name]);
     try {
       if (ssoPairs.length) await ipc.checkExistingSso(ssoPairs);
       if (iamPairs.length) await ipc.checkExistingIam(iamPairs);
@@ -94,6 +74,7 @@
     pollTimer = setInterval(() => {
       now = Date.now();
     }, 1000);
+    window.addEventListener('keydown', onKeydown);
   });
 
   onDestroy(() => {
@@ -101,14 +82,14 @@
     unlistens.clear();
     unlistenChanged?.();
     if (pollTimer) clearInterval(pollTimer);
+    window.removeEventListener('keydown', onKeydown);
   });
 
   async function attachListeners(alias: string) {
     if (unlistens.has(alias)) return;
     const onOut = await ipc.onSessionOutput(alias, (line) => {
-      if (viewing === alias) {
-        viewingLines = [...viewingLines, line].slice(-500);
-        scrollOutputToBottom();
+      if (selectedAlias === alias) {
+        selectedOutput = [...selectedOutput, line].slice(-1000);
       }
     });
     const onStat = await ipc.onSessionStatus(alias, (status) => {
@@ -117,11 +98,15 @@
     unlistens.set(alias, [onOut, onStat]);
   }
 
-  function detachListeners(alias: string) {
-    const fns = unlistens.get(alias);
-    if (fns) {
-      for (const fn of fns) fn();
-      unlistens.delete(alias);
+  async function selectAlias(name: string) {
+    if (selectedAlias === name) return;
+    selectedAlias = name;
+    selectedOutput = [];
+    await attachListeners(name);
+    try {
+      selectedOutput = await ipc.sessionOutput(name);
+    } catch {
+      selectedOutput = [];
     }
   }
 
@@ -145,37 +130,31 @@
     try {
       const status = await ipc.stopSession(a.name);
       sessions.update((s) => ({ ...s, [a.name]: status }));
-    } finally {
-      detachListeners(a.name);
+    } catch (e) {
+      loadError = `Failed to stop ${a.name}: ${e}`;
     }
-  }
-
-  async function viewOutput(a: Alias) {
-    viewing = a.name;
-    viewingLines = await ipc.sessionOutput(a.name);
-    await attachListeners(a.name);
-    await tick();
-    scrollOutputToBottom();
-  }
-
-  function closeOutput() {
-    viewing = null;
-    viewingLines = [];
-  }
-
-  function scrollOutputToBottom() {
-    if (outputBox) outputBox.scrollTop = outputBox.scrollHeight;
   }
 
   async function doStopAll() {
     confirmStopAll = false;
     try {
-      const n = await ipc.stopAllSessions();
-      loadError = null;
-      console.log(`Stopped ${n} session(s)`);
+      await ipc.stopAllSessions();
       await syncSessions();
     } catch (e) {
       loadError = `stop-all failed: ${e}`;
+    }
+  }
+
+  async function copyCommand(cmd: string) {
+    try {
+      const { writeText } = await import('@tauri-apps/plugin-clipboard-manager');
+      await writeText(cmd);
+    } catch {
+      try {
+        await navigator.clipboard.writeText(cmd);
+      } catch {
+        // ignore
+      }
     }
   }
 
@@ -196,229 +175,161 @@
     );
   }
 
-  let groups = $derived(
-    groupAliases($aliases.filter(matchesFilter))
-  );
-
+  let groups: AliasGroup[] = $derived(groupAliases($aliases.filter(matchesFilter)));
   let runningCount = $derived(
     Object.values($sessions).filter((s) => isActive(s)).length
   );
+  let selectedAliasObj = $derived(
+    selectedAlias ? $aliases.find((a) => a.name === selectedAlias) ?? null : null
+  );
 
-  function expiryHint(s: SessionStatus | undefined): string | null {
-    if (!s) return null;
-    if (s.tokenRemainingSecs == null) return null;
-    if (s.tokenRemainingSecs === 0) return 'expired';
-    return `expires in ${formatDuration(s.tokenRemainingSecs)}`;
-  }
+  // ─── Keyboard shortcuts ─────────────────────────────────────────────
 
-  function uptime(s: SessionStatus | undefined): string {
-    void now;
-    return uptimeFrom(s?.startedAt ?? null);
+  function onKeydown(e: KeyboardEvent) {
+    const tag = (e.target as HTMLElement | null)?.tagName ?? '';
+    const inInput = ['INPUT', 'TEXTAREA'].includes(tag);
+
+    // Global: '/' focuses search (works even when input has focus)
+    if (e.key === '/' && !inInput) {
+      e.preventDefault();
+      searchInput?.focus();
+      searchInput?.select();
+      return;
+    }
+
+    // Esc clears selection state
+    if (e.key === 'Escape') {
+      if (credentialsFor) { credentialsFor = null; return; }
+      if (confirmStopAll) { confirmStopAll = false; return; }
+      if (inInput && document.activeElement === searchInput) {
+        if (filter) { filter = ''; return; }
+        searchInput?.blur();
+        return;
+      }
+    }
+
+    if (inInput) return;
+
+    const flat = flatten(groups, collapsed).filter((r) => r.type === 'alias');
+    if (flat.length === 0) return;
+    const currentIdx = flat.findIndex((r) => r.alias!.name === selectedAlias);
+    const cur = currentIdx >= 0 ? currentIdx : 0;
+
+    if (e.key === 'ArrowDown' || e.key === 'j') {
+      e.preventDefault();
+      const next = flat[Math.min(cur + 1, flat.length - 1)];
+      if (next.alias) selectAlias(next.alias.name);
+      return;
+    }
+    if (e.key === 'ArrowUp' || e.key === 'k') {
+      e.preventDefault();
+      const prev = flat[Math.max(cur - 1, 0)];
+      if (prev.alias) selectAlias(prev.alias.name);
+      return;
+    }
+    if (e.key === 'Home' || e.key === 'g') {
+      e.preventDefault();
+      if (flat[0]?.alias) selectAlias(flat[0].alias.name);
+      return;
+    }
+    if (e.key === 'End' || e.key === 'G') {
+      e.preventDefault();
+      const last = flat[flat.length - 1];
+      if (last.alias) selectAlias(last.alias.name);
+      return;
+    }
+    if (e.key === 'Enter') {
+      if (selectedAliasObj && !isActive($sessions[selectedAliasObj.name])) {
+        e.preventDefault();
+        start(selectedAliasObj);
+      }
+      return;
+    }
+    if (e.key === 's' && !e.ctrlKey && !e.metaKey) {
+      if (selectedAliasObj && isActive($sessions[selectedAliasObj.name])) {
+        e.preventDefault();
+        stop(selectedAliasObj);
+      }
+      return;
+    }
+    if (e.key === 'S' && e.shiftKey) {
+      if (runningCount > 0) {
+        e.preventDefault();
+        confirmStopAll = true;
+      }
+      return;
+    }
+    if (e.key === 'r' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      refresh();
+    }
   }
 </script>
 
-<div class="space-y-4">
-  <PageHeader
-    title="Sessions"
-    subtitle={$aliasesPath
-      ? `Loaded from ${$aliasesPath} · ${runningCount} active`
-      : 'Start, stop, and monitor AWS SSO, SSM, and IAM sessions defined in your shell aliases.'}
-  >
-    {#snippet actions()}
+<div class="flex h-full flex-col">
+  <div class="flex items-center justify-between gap-3 border-b border-border bg-background px-4 py-2">
+    <div class="flex items-center gap-2 text-xs text-muted-foreground">
+      {#if $aliasesPath}
+        <span class="font-mono">
+          {$aliasesPath.split(/[\\/]/).pop()}
+        </span>
+        <span>·</span>
+      {/if}
+      <span>{$aliases.length} aliases</span>
+      {#if runningCount > 0}
+        <span class="text-status-ok">· {runningCount} active</span>
+      {/if}
+    </div>
+    <div class="flex items-center gap-1.5">
+      <span class="hidden text-[10px] text-muted-foreground sm:inline">
+        <Kbd>↑↓</Kbd> nav · <Kbd>Enter</Kbd> start · <Kbd>s</Kbd> stop · <Kbd>/</Kbd> search
+      </span>
       {#if runningCount > 0}
         <Button variant="outline" size="sm" onclick={() => (confirmStopAll = true)}>
-          <PowerOff class="h-3.5 w-3.5" /> Stop all ({runningCount})
+          <PowerOff class="h-3.5 w-3.5" /> Stop all
         </Button>
       {/if}
       <Button variant="outline" size="sm" onclick={refresh} disabled={$loading.aliases}>
         <RefreshCw class={'h-3.5 w-3.5 ' + ($loading.aliases ? 'animate-spin' : '')} />
         Refresh
       </Button>
-    {/snippet}
-  </PageHeader>
+    </div>
+  </div>
 
   {#if loadError}
-    <div class="rounded-md border border-status-error/30 bg-status-error/10 px-3 py-2 text-sm text-status-error">
+    <div class="border-b border-status-error/30 bg-status-error/10 px-4 py-2 text-xs text-status-error">
       {loadError}
     </div>
   {/if}
 
-  <div class="flex items-center gap-2">
-    <div class="relative flex-1 max-w-sm">
-      <Search class="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-      <Input class="pl-8" placeholder="Filter aliases…" bind:value={filter} />
-    </div>
-    <span class="text-xs text-muted-foreground">
-      {$aliases.length} alias{$aliases.length === 1 ? '' : 'es'}
-    </span>
-  </div>
-
-  <div class="space-y-5">
-    {#each groups as g (g.name)}
-      {@const isCollapsed = collapsed[g.name]}
-      {@const GroupIcon = g.icon}
-      {@const total = g.subgroups.reduce((acc, sg) => acc + sg.aliases.length, 0)}
-      <section>
-        <button
-          type="button"
-          onclick={() => toggleGroup(g.name)}
-          class="flex w-full items-center gap-2 py-1 text-left"
-        >
-          {#if isCollapsed}
-            <ChevronRight class="h-4 w-4 text-muted-foreground" />
-          {:else}
-            <ChevronDown class="h-4 w-4 text-muted-foreground" />
-          {/if}
-          <GroupIcon class="h-4 w-4 text-primary" />
-          <h3 class="text-sm font-semibold tracking-tight">{g.name}</h3>
-          <span class="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-            {total}
-          </span>
-          {#if !g.explicit}
-            <span class="text-[10px] uppercase tracking-wider text-muted-foreground">auto</span>
-          {/if}
-        </button>
-
-        {#if !isCollapsed}
-          <div class="mt-2 space-y-4">
-            {#each g.subgroups as sg (sg.name)}
-              {@const SubIcon = subgroupIcon(sg.name)}
-              <div>
-                <div class="mb-2 flex items-center gap-2 px-1 text-xs uppercase tracking-wider text-muted-foreground">
-                  <SubIcon class="h-3 w-3" />
-                  <span>{sg.name}</span>
-                  <span class="text-[10px] normal-case text-muted-foreground/60">({sg.aliases.length})</span>
-                  <span class="h-px flex-1 bg-border"></span>
-                </div>
-                <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                  {#each sg.aliases as alias (alias.name)}
-                    {@const st = $sessions[alias.name]}
-                    {@const active = isActive(st)}
-                    {@const port = portHint(alias)}
-                    {@const exp = expiryHint(st)}
-                    <div class="rounded-lg border border-border bg-card p-4 transition-colors hover:border-primary/40">
-                      <div class="flex items-center justify-between gap-2">
-                        <div class="flex min-w-0 items-center gap-2">
-                          <StatusDot
-                            tone={stateTone(st?.state)}
-                            pulse={st?.state === 'starting'}
-                          />
-                          <span class="truncate font-mono text-sm font-medium">{alias.name}</span>
-                        </div>
-                        <Badge variant={kindBadgeVariant(alias.kind)}>{kindLabel(alias.kind)}</Badge>
-                      </div>
-
-                      {#if port}
-                        <p class="mt-2 truncate font-mono text-xs text-muted-foreground">{port}</p>
-                      {:else}
-                        <p class="mt-2 line-clamp-2 font-mono text-xs text-muted-foreground">{alias.command}</p>
-                      {/if}
-
-                      <div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                        <span class="capitalize">{stateLabel(st?.state)}</span>
-                        {#if st?.pid}<span class="font-mono">· pid {st.pid}</span>{/if}
-                        {#if active}<span>· up {uptime(st)}</span>{/if}
-                        {#if alias.profile}<span class="font-mono">· {alias.profile}</span>{/if}
-                        {#if alias.region}<span class="font-mono">· {alias.region}</span>{/if}
-                        {#if exp}
-                          <span class={st?.tokenRemainingSecs === 0 ? 'text-status-warn' : ''}>
-                            · {exp}
-                          </span>
-                        {/if}
-                      </div>
-
-                      {#if st?.errorMessage}
-                        <p class="mt-2 truncate text-xs text-status-error" title={st.errorMessage}>
-                          {st.errorMessage}
-                        </p>
-                      {/if}
-
-                      <div class="mt-3 flex items-center justify-end gap-1.5">
-                        {#if st?.hasCredentials}
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onclick={() => (credentialsFor = alias.name)}
-                          >
-                            <KeyRound class="h-3.5 w-3.5" /> Creds
-                          </Button>
-                        {/if}
-                        {#if active || (st?.output ?? false)}
-                          <Button variant="ghost" size="sm" onclick={() => viewOutput(alias)}>
-                            <TermIcon class="h-3.5 w-3.5" />
-                          </Button>
-                        {/if}
-                        {#if active}
-                          <Button variant="destructive" size="sm" onclick={() => stop(alias)}>
-                            <Square class="h-3.5 w-3.5" /> Stop
-                          </Button>
-                        {:else}
-                          <Button size="sm" onclick={() => start(alias)}>
-                            <Play class="h-3.5 w-3.5" />
-                            {st?.state === 'expired' ? 'Re-login' : 'Start'}
-                          </Button>
-                        {/if}
-                      </div>
-                    </div>
-                  {/each}
-                </div>
-              </div>
-            {/each}
-          </div>
-        {/if}
-      </section>
-    {:else}
-      <div class="rounded-lg border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
-        {$loading.aliases ? 'Loading aliases…' : filter ? 'No aliases match your filter' : 'No aliases'}
-      </div>
-    {/each}
+  <div class="flex min-h-0 flex-1">
+    <aside class="flex w-80 shrink-0 flex-col border-r border-border bg-card/30">
+      <SessionList
+        {groups}
+        sessions={$sessions}
+        bind:selectedAlias
+        bind:filter
+        onSelect={selectAlias}
+        onToggleGroup={toggleGroup}
+        {collapsed}
+        bind:searchInput
+        totalCount={$aliases.length}
+      />
+    </aside>
+    <main class="min-w-0 flex-1 bg-background">
+      <SessionDetail
+        alias={selectedAliasObj}
+        status={selectedAlias ? $sessions[selectedAlias] : undefined}
+        output={selectedOutput}
+        nowTick={now}
+        onStart={start}
+        onStop={stop}
+        onShowCredentials={(name) => (credentialsFor = name)}
+        onCopyCommand={copyCommand}
+      />
+    </main>
   </div>
 </div>
-
-{#if viewing}
-  <div
-    role="dialog"
-    aria-modal="true"
-    class="fixed inset-0 z-50 flex items-end justify-center bg-black/40 backdrop-blur-sm sm:items-center sm:p-4"
-    onclick={closeOutput}
-  >
-    <div
-      class="flex h-[70vh] w-full max-w-3xl flex-col overflow-hidden rounded-t-lg border border-border bg-card shadow-xl sm:rounded-lg"
-      onclick={(e) => e.stopPropagation()}
-    >
-      <div class="flex items-center justify-between border-b border-border px-4 py-2.5">
-        <div class="flex items-center gap-2">
-          <TermIcon class="h-4 w-4 text-primary" />
-          <span class="font-mono text-sm font-medium">{viewing}</span>
-          <Badge variant={stateTone($sessions[viewing]?.state)}>
-            {stateLabel($sessions[viewing]?.state)}
-          </Badge>
-          {#if $sessions[viewing]?.pid}
-            <span class="font-mono text-xs text-muted-foreground">
-              pid {$sessions[viewing]?.pid}
-            </span>
-          {/if}
-        </div>
-        <button
-          onclick={closeOutput}
-          class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-          aria-label="Close"
-        >
-          <X class="h-4 w-4" />
-        </button>
-      </div>
-      <div bind:this={outputBox} class="min-h-0 flex-1 overflow-auto bg-[#0f1114] p-3 font-mono text-xs">
-        {#if viewingLines.length === 0}
-          <span class="italic text-muted-foreground">(no output yet)</span>
-        {:else}
-          {#each viewingLines as line, i (i)}
-            <div class={'whitespace-pre-wrap leading-relaxed ' + outputLineClass(line)}>{line}</div>
-          {/each}
-        {/if}
-      </div>
-    </div>
-  </div>
-{/if}
 
 {#if credentialsFor}
   <CredentialsModal

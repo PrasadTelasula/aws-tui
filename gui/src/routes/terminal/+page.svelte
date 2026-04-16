@@ -87,7 +87,7 @@
   }
 </script>
 
-<div class="flex h-full flex-col gap-4">
+<div class="flex h-full flex-col gap-4 px-6 py-5">
   <PageHeader
     title="Terminal"
     subtitle="Embedded shell with AWS_PROFILE and AWS_REGION pre-set."

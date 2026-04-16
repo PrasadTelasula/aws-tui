@@ -56,7 +56,7 @@
   }
 </script>
 
-<div class="space-y-4">
+<div class="h-full space-y-4 overflow-auto px-6 py-5">
   <PageHeader title="Containers" subtitle="ECS clusters, services, tasks, and containers.">
     {#snippet actions()}
       <Button variant="outline" size="sm" onclick={refresh} disabled={$loading.clusters}>

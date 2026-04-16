@@ -11,7 +11,7 @@
   <Sidebar />
   <div class="flex min-w-0 flex-1 flex-col">
     <Topbar />
-    <main class="flex-1 overflow-auto px-6 py-5">
+    <main class="min-h-0 flex-1 overflow-hidden">
       {@render children()}
     </main>
   </div>

@@ -45,7 +45,7 @@
   ];
 </script>
 
-<div class="space-y-4">
+<div class="h-full space-y-4 overflow-auto px-6 py-5">
   <PageHeader
     title="EC2 Instances"
     subtitle="Browse instances in the selected profile and region."

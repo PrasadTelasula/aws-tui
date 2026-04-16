@@ -12,7 +12,8 @@
     outputLineClass,
     portHint,
     stateLabel,
-    stateTone
+    stateTone,
+    subgroupIcon
   } from '$lib/sessions-helpers';
   import { formatDuration, uptimeFrom } from '$lib/utils';
   import PageHeader from '$lib/components/app-shell/page-header.svelte';
@@ -255,6 +256,8 @@
   <div class="space-y-5">
     {#each groups as g (g.name)}
       {@const isCollapsed = collapsed[g.name]}
+      {@const GroupIcon = g.icon}
+      {@const total = g.subgroups.reduce((acc, sg) => acc + sg.aliases.length, 0)}
       <section>
         <button
           type="button"
@@ -266,18 +269,25 @@
           {:else}
             <ChevronDown class="h-4 w-4 text-muted-foreground" />
           {/if}
+          <GroupIcon class="h-4 w-4 text-primary" />
           <h3 class="text-sm font-semibold tracking-tight">{g.name}</h3>
-          <span class="text-xs text-muted-foreground">
-            · {g.subgroups.reduce((acc, sg) => acc + sg.aliases.length, 0)}
+          <span class="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+            {total}
           </span>
+          {#if !g.explicit}
+            <span class="text-[10px] uppercase tracking-wider text-muted-foreground">auto</span>
+          {/if}
         </button>
 
         {#if !isCollapsed}
           <div class="mt-2 space-y-4">
             {#each g.subgroups as sg (sg.name)}
+              {@const SubIcon = subgroupIcon(sg.name)}
               <div>
                 <div class="mb-2 flex items-center gap-2 px-1 text-xs uppercase tracking-wider text-muted-foreground">
+                  <SubIcon class="h-3 w-3" />
                   <span>{sg.name}</span>
+                  <span class="text-[10px] normal-case text-muted-foreground/60">({sg.aliases.length})</span>
                   <span class="h-px flex-1 bg-border"></span>
                 </div>
                 <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">

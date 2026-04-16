@@ -33,7 +33,12 @@ pub fn parse(content: &str) -> Vec<Alias> {
 
     for raw in content.lines() {
         let line = raw.trim();
+        // Blank line ends the current section — group/subgroup don't carry
+        // over to the next block. This avoids the TUI's sticky-header bug
+        // where a single `# group:` at the top swallows the whole file.
         if line.is_empty() {
+            group = None;
+            subgroup = None;
             continue;
         }
         if let Some(caps) = group_re().captures(line) {
@@ -47,22 +52,25 @@ pub fn parse(content: &str) -> Vec<Alias> {
         if let Some(caps) = alias_re().captures(line) {
             let name = caps[1].to_string();
             let command = caps[2].to_string();
-            let is_iam = subgroup
-                .as_deref()
-                .map(|s| s.eq_ignore_ascii_case("iam"))
-                .unwrap_or(false);
-            let kind = if is_iam {
-                AliasKind::IamProfile
-            } else {
-                classify(&command)
-            };
+            let kind = classify(&command);
             let ssm_params = if matches!(kind, AliasKind::SsmSession) {
                 extract_ssm_params(&command)
             } else {
                 SsmParams::default()
             };
+            let alias_profile = extract_profile(&command);
+            // For IAM aliases (`aws sts get-caller-identity --profile X`),
+            // the alias name is conventionally the profile name itself, so
+            // we surface the alias name when --profile isn't present.
+            let profile = alias_profile.or_else(|| {
+                if matches!(kind, AliasKind::IamProfile) {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            });
             out.push(Alias {
-                profile: extract_profile(&command),
+                profile,
                 region: extract_region(&command),
                 target: extract_target(&command),
                 sso_session_name: if matches!(kind, AliasKind::SsoLogin) {
@@ -90,6 +98,8 @@ fn classify(command: &str) -> AliasKind {
         AliasKind::SsoLogin
     } else if command.contains("aws ssm start-session") {
         AliasKind::SsmSession
+    } else if command.contains("aws sts get-caller-identity") {
+        AliasKind::IamProfile
     } else {
         AliasKind::Other
     }

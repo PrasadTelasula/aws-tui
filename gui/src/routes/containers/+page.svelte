@@ -4,10 +4,19 @@
   import { ipc } from '$lib/ipc';
   import { clusters, loading, profile, region } from '$lib/stores/aws';
   import type { Cluster, Container, Service, Task } from '$lib/types';
-  import PageHeader from '$lib/components/app-shell/page-header.svelte';
   import PtyTerminal from '$lib/components/pty-terminal.svelte';
   import { Badge, Button } from '$lib/components/ui';
-  import { ChevronRight, ChevronDown, RefreshCw, Terminal } from 'lucide-svelte';
+  import {
+    ChevronRight,
+    ChevronDown,
+    RefreshCw,
+    Terminal,
+    Boxes,
+    Layers,
+    CircleDot,
+    Loader2
+  } from 'lucide-svelte';
+  import { cn } from '$lib/utils';
 
   type ServiceNode = Service & { tasks?: Task[]; expanded?: boolean; loading?: boolean };
   type ClusterNode = Cluster & { services?: ServiceNode[]; expanded?: boolean; loading?: boolean };
@@ -15,13 +24,17 @@
   let tree = $state<ClusterNode[]>([]);
   let activeTask = $state<Task | null>(null);
   let containers = $state<Container[]>([]);
+  let loadingContainers = $state(false);
 
-  // ECS exec terminal state
+  // ECS exec terminal
   let termContainer = $state<{ task: Task; container: Container } | null>(null);
   let termKey = $state(0);
 
   async function refresh() {
     loading.update((l) => ({ ...l, clusters: true }));
+    activeTask = null;
+    containers = [];
+    termContainer = null;
     try {
       const list = await ipc.listClusters(get(profile), get(region));
       clusters.set(list);
@@ -59,7 +72,13 @@
   async function selectTask(t: Task) {
     activeTask = t;
     termContainer = null;
-    containers = await ipc.listContainers(t.arn, t.cluster, get(profile), get(region));
+    loadingContainers = true;
+    containers = [];
+    try {
+      containers = await ipc.listContainers(t.arn, t.cluster, get(profile), get(region));
+    } finally {
+      loadingContainers = false;
+    }
   }
 
   function execContainer(task: Task, container: Container) {
@@ -68,154 +87,240 @@
   }
 </script>
 
-<div class="flex h-full flex-col gap-4 px-6 py-5">
-  <PageHeader title="Containers" subtitle="ECS clusters, services, tasks, and containers.">
-    {#snippet actions()}
-      <Button variant="outline" size="sm" onclick={refresh} disabled={$loading.clusters}>
-        <RefreshCw class={'h-3.5 w-3.5 ' + ($loading.clusters ? 'animate-spin' : '')} />
-        Refresh
-      </Button>
-    {/snippet}
-  </PageHeader>
+<div class="flex h-full flex-col">
+  <!-- Toolbar -->
+  <div class="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-card/40 px-4">
+    <div class="flex items-center gap-2">
+      <Boxes class="h-4 w-4 text-muted-foreground" />
+      <h1 class="text-sm font-semibold">Containers</h1>
+      {#if $clusters.length > 0}
+        <span class="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
+          {$clusters.length} cluster{$clusters.length !== 1 ? 's' : ''}
+        </span>
+      {/if}
+    </div>
+    <Button
+      variant="outline"
+      size="sm"
+      onclick={refresh}
+      disabled={$loading.clusters}
+      class="ml-auto h-8"
+    >
+      <RefreshCw class={'h-3.5 w-3.5 ' + ($loading.clusters ? 'animate-spin' : '')} />
+      Refresh
+    </Button>
+  </div>
 
-  <div class="grid min-h-0 flex-1 gap-4 lg:grid-cols-[1fr_1fr]">
-    <!-- Cluster / service / task tree -->
-    <div class="overflow-auto rounded-lg border border-border bg-card">
-      <div class="border-b border-border px-4 py-2 text-xs font-medium text-muted-foreground">
-        Tree
+  <!-- Main: tree + detail -->
+  <div class="flex min-h-0 flex-1">
+    <!-- Tree sidebar -->
+    <div class="flex w-64 shrink-0 flex-col border-r border-border bg-card/20">
+      <div class="border-b border-border px-3 py-2">
+        <p class="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+          Clusters
+        </p>
       </div>
-      <div class="p-2 text-sm">
-        {#if tree.length === 0}
-          <p class="p-4 text-center text-sm text-muted-foreground">
-            {$loading.clusters ? 'Loading clusters…' : 'No clusters'}
-          </p>
-        {/if}
-        {#each tree as c (c.arn)}
-          <div>
-            <button
-              class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-muted"
-              onclick={() => toggleCluster(c)}
-            >
-              {#if c.expanded}
-                <ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
-              {:else}
-                <ChevronRight class="h-3.5 w-3.5 text-muted-foreground" />
-              {/if}
-              <span class="font-mono text-sm font-medium">{c.name}</span>
-              <Badge variant="muted" class="ml-auto">{c.runningTasks} tasks</Badge>
-            </button>
-            {#if c.expanded}
-              <div class="ml-4 border-l border-border pl-2">
-                {#if c.loading}
-                  <p class="p-2 text-xs text-muted-foreground">Loading services…</p>
-                {/if}
-                {#each c.services ?? [] as s (s.arn)}
-                  <button
-                    class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-muted"
-                    onclick={() => toggleService(c, s)}
-                  >
-                    {#if s.expanded}
-                      <ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
-                    {:else}
-                      <ChevronRight class="h-3.5 w-3.5 text-muted-foreground" />
-                    {/if}
-                    <span class="font-mono text-xs">{s.name}</span>
-                    <Badge variant={s.running === s.desired ? 'ok' : 'warn'} class="ml-auto">
-                      {s.running}/{s.desired}
-                    </Badge>
-                  </button>
-                  {#if s.expanded}
-                    <div class="ml-4 border-l border-border pl-2">
-                      {#if s.loading}
-                        <p class="p-2 text-xs text-muted-foreground">Loading tasks…</p>
-                      {/if}
-                      {#each s.tasks ?? [] as t (t.arn)}
-                        <button
-                          class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-muted"
-                          onclick={() => selectTask(t)}
-                        >
-                          <Terminal class="h-3.5 w-3.5 text-muted-foreground" />
-                          <span class="font-mono text-[11px]">{t.arn.split('/').pop()}</span>
-                          <Badge
-                            variant={t.lastStatus === 'RUNNING' ? 'ok' : 'muted'}
-                            class="ml-auto"
-                          >
-                            {t.lastStatus}
-                          </Badge>
-                        </button>
-                      {/each}
-                    </div>
-                  {/if}
-                {/each}
-              </div>
-            {/if}
+      <div class="min-h-0 flex-1 overflow-auto py-1">
+        {#if $loading.clusters}
+          <div class="flex items-center gap-2 px-3 py-4 text-xs text-muted-foreground">
+            <Loader2 class="h-3.5 w-3.5 animate-spin" />
+            Loading clusters…
           </div>
+        {:else if tree.length === 0}
+          <p class="px-3 py-8 text-center text-xs text-muted-foreground">No clusters</p>
+        {/if}
+
+        {#each tree as c (c.arn)}
+          <!-- Cluster row -->
+          <button
+            class="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold transition-colors hover:bg-accent/40"
+            onclick={() => toggleCluster(c)}
+          >
+            {#if c.expanded}
+              <ChevronDown class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            {:else}
+              <ChevronRight class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            {/if}
+            <Layers class="h-3.5 w-3.5 shrink-0 text-primary/70" />
+            <span class="flex-1 truncate font-mono">{c.name}</span>
+            <Badge variant="muted" class="text-[10px]">{c.runningTasks}</Badge>
+          </button>
+
+          {#if c.expanded}
+            <div class="ml-3 border-l border-border/60 pl-2">
+              {#if c.loading}
+                <div class="flex items-center gap-2 px-2 py-2 text-[11px] text-muted-foreground">
+                  <Loader2 class="h-3 w-3 animate-spin" /> Loading…
+                </div>
+              {/if}
+              {#each c.services ?? [] as s (s.arn)}
+                <!-- Service row -->
+                <button
+                  class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[11px] transition-colors hover:bg-accent/30"
+                  onclick={() => toggleService(c, s)}
+                >
+                  {#if s.expanded}
+                    <ChevronDown class="h-3 w-3 shrink-0 text-muted-foreground" />
+                  {:else}
+                    <ChevronRight class="h-3 w-3 shrink-0 text-muted-foreground" />
+                  {/if}
+                  <span class="flex-1 truncate font-mono">{s.name}</span>
+                  <Badge
+                    variant={s.running === s.desired ? 'ok' : 'warn'}
+                    class="text-[10px]"
+                  >
+                    {s.running}/{s.desired}
+                  </Badge>
+                </button>
+
+                {#if s.expanded}
+                  <div class="ml-3 border-l border-border/60 pl-2">
+                    {#if s.loading}
+                      <div class="flex items-center gap-2 px-2 py-1.5 text-[11px] text-muted-foreground">
+                        <Loader2 class="h-3 w-3 animate-spin" /> Loading…
+                      </div>
+                    {/if}
+                    {#each s.tasks ?? [] as t (t.arn)}
+                      <button
+                        class={cn(
+                          'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[11px] transition-colors hover:bg-accent/30',
+                          activeTask?.arn === t.arn && 'bg-accent/50 font-medium'
+                        )}
+                        onclick={() => selectTask(t)}
+                      >
+                        <CircleDot
+                          class={cn(
+                            'h-3 w-3 shrink-0',
+                            t.lastStatus === 'RUNNING' ? 'text-status-ok' : 'text-muted-foreground'
+                          )}
+                        />
+                        <span class="flex-1 truncate font-mono text-[10px]">
+                          {t.arn.split('/').pop()}
+                        </span>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              {/each}
+            </div>
+          {/if}
         {/each}
       </div>
     </div>
 
-    <!-- Task detail + containers -->
-    <aside class="overflow-auto rounded-lg border border-border bg-card p-4">
+    <!-- Right: task detail + containers + terminal -->
+    <div class="flex min-w-0 flex-1 flex-col">
       {#if activeTask}
         {@const task = activeTask}
-        <div class="space-y-3">
-          <div>
-            <p class="font-mono text-sm font-semibold">{task.arn.split('/').pop()}</p>
-            <p class="text-xs text-muted-foreground">{task.launchType} · {task.lastStatus}</p>
+        <!-- Task header -->
+        <div class="flex shrink-0 items-center gap-3 border-b border-border bg-card/20 px-4 py-3">
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2">
+              <p class="font-mono text-sm font-semibold">{task.arn.split('/').pop()}</p>
+              <Badge variant={task.lastStatus === 'RUNNING' ? 'ok' : 'muted'} class="text-[10px]">
+                {task.lastStatus}
+              </Badge>
+            </div>
+            <p class="mt-0.5 text-[11px] text-muted-foreground">
+              {task.launchType} · {task.cluster}
+            </p>
           </div>
-          <div>
-            <p class="mb-2 text-xs font-medium text-muted-foreground">Containers</p>
+        </div>
+
+        <!-- Containers list -->
+        <div class="min-h-0 flex-1 overflow-auto p-4">
+          {#if loadingContainers}
+            <div class="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 class="h-4 w-4 animate-spin" /> Loading containers…
+            </div>
+          {:else if containers.length === 0}
+            <p class="text-sm text-muted-foreground">No containers found.</p>
+          {:else}
             <div class="space-y-2">
               {#each containers as c (c.name)}
-                <div class="rounded-md border border-border p-3">
-                  <div class="flex items-center justify-between">
-                    <span class="font-mono text-sm font-medium">{c.name}</span>
-                    <Badge variant={c.lastStatus === 'RUNNING' ? 'ok' : 'muted'}
-                      >{c.lastStatus}</Badge
-                    >
+                <div
+                  class={cn(
+                    'rounded-lg border border-border bg-card p-3 transition-colors',
+                    termContainer?.container.name === c.name && 'border-primary/30 bg-primary/5'
+                  )}
+                >
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-center gap-2">
+                        <span class="font-mono text-sm font-semibold">{c.name}</span>
+                        <Badge
+                          variant={c.lastStatus === 'RUNNING' ? 'ok' : 'muted'}
+                          class="text-[10px]"
+                        >
+                          {c.lastStatus}
+                        </Badge>
+                        {#if c.health}
+                          <Badge
+                            variant={c.health === 'HEALTHY' ? 'ok' : 'warn'}
+                            class="text-[10px]"
+                          >
+                            {c.health}
+                          </Badge>
+                        {/if}
+                      </div>
+                      <p class="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                        {c.image || '—'}
+                      </p>
+                    </div>
+                    {#if c.lastStatus === 'RUNNING'}
+                      <Button
+                        size="sm"
+                        variant={termContainer?.container.name === c.name ? 'secondary' : 'outline'}
+                        onclick={() => execContainer(task, c)}
+                        class="shrink-0"
+                      >
+                        <Terminal class="h-3.5 w-3.5" />
+                        Exec
+                      </Button>
+                    {/if}
                   </div>
-                  <p class="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-                    {c.image}
-                  </p>
-                  {#if c.lastStatus === 'RUNNING'}
-                    <Button size="sm" class="mt-2" onclick={() => execContainer(task, c)}>
-                      <Terminal class="h-3.5 w-3.5" />
-                      Exec
-                    </Button>
-                  {/if}
                 </div>
               {/each}
             </div>
+          {/if}
+        </div>
+
+        <!-- ECS exec terminal -->
+        {#if termContainer}
+          {@const { task: t, container } = termContainer}
+          {@const ptyId = `ecs-${t.arn.split('/').pop()}-${container.name}-${termKey}`}
+          <div class="h-64 shrink-0 border-t border-border">
+            <PtyTerminal
+              {ptyId}
+              title="exec · {container.name} · {t.arn.split('/').pop()}"
+              onReady={async (rows, cols) => {
+                await ipc.ptyOpenEcsExec(
+                  ptyId,
+                  t.cluster,
+                  t.arn,
+                  container.name,
+                  undefined,
+                  get(profile),
+                  get(region),
+                  rows,
+                  cols
+                );
+              }}
+              onClose={() => (termContainer = null)}
+            />
+          </div>
+        {/if}
+      {:else}
+        <div class="flex flex-1 flex-col items-center justify-center gap-3 text-center">
+          <Boxes class="h-10 w-10 text-muted-foreground/30" />
+          <div>
+            <p class="text-sm font-medium text-muted-foreground">No task selected</p>
+            <p class="mt-1 text-xs text-muted-foreground/60">
+              Expand a cluster → service → task in the sidebar
+            </p>
           </div>
         </div>
-      {:else}
-        <p class="text-sm text-muted-foreground">Select a task to view its containers.</p>
       {/if}
-    </aside>
-  </div>
-
-  {#if termContainer}
-    {@const { task, container } = termContainer}
-    {@const ptyId = `ecs-${task.arn.split('/').pop()}-${container.name}-${termKey}`}
-    <div class="h-72 shrink-0">
-      <PtyTerminal
-        {ptyId}
-        title="exec · {container.name}"
-        onReady={async (rows, cols) => {
-          await ipc.ptyOpenEcsExec(
-            ptyId,
-            task.cluster,
-            task.arn,
-            container.name,
-            undefined,
-            get(profile),
-            get(region),
-            rows,
-            cols
-          );
-        }}
-        onClose={() => (termContainer = null)}
-      />
     </div>
-  {/if}
+  </div>
 </div>

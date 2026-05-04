@@ -15,6 +15,7 @@
 
 <script lang="ts" generics="TData">
   import { cn } from '$lib/utils';
+  import { ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-svelte';
 
   interface Props {
     data: TData[];
@@ -22,6 +23,7 @@
     filter?: string;
     class?: string;
     emptyLabel?: string;
+    selectedKey?: string | number | null;
     onRowClick?: (row: TData) => void;
     rowKey?: (row: TData, index: number) => string | number;
   }
@@ -32,6 +34,7 @@
     filter = '',
     class: className,
     emptyLabel = 'No results',
+    selectedKey = null,
     onRowClick,
     rowKey
   }: Props = $props();
@@ -59,8 +62,7 @@
     if (f) {
       rows = rows.filter((r) =>
         columns.some((c) => {
-          const v =
-            c.filterValue?.(r) ?? c.accessor?.(r) ?? defaultAccess(r, c.key);
+          const v = c.filterValue?.(r) ?? c.accessor?.(r) ?? defaultAccess(r, c.key);
           return v != null && String(v).toLowerCase().includes(f);
         })
       );
@@ -86,55 +88,70 @@
   });
 </script>
 
-<div class={cn('overflow-hidden rounded-lg border border-border bg-card', className)}>
-  <table class="w-full text-sm">
-    <thead class="bg-muted/40">
-      <tr>
-        {#each columns as col (col.key)}
-          <th
-            class={cn(
-              'h-10 px-4 text-left align-middle font-medium text-muted-foreground',
-              col.sortable && 'cursor-pointer select-none',
-              col.class
-            )}
-            onclick={() => toggleSort(col)}
-          >
-            <div class="flex items-center gap-1.5">
-              <span>{col.header}</span>
-              {#if col.sortable && sortKey === col.key}
-                <span class="text-xs">{sortDir === 'asc' ? '↑' : '↓'}</span>
-              {/if}
-            </div>
-          </th>
-        {/each}
-      </tr>
-    </thead>
-    <tbody>
-      {#each processed as row, i (rowKey ? rowKey(row, i) : i)}
-        <tr
-          class={cn(
-            'border-t border-border transition-colors hover:bg-muted/40',
-            onRowClick && 'cursor-pointer'
-          )}
-          onclick={() => onRowClick?.(row)}
-        >
+<div class={cn('flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card', className)}>
+  <div class="min-h-0 flex-1 overflow-auto">
+    <table class="w-full caption-bottom text-sm">
+      <thead class="sticky top-0 z-10 bg-muted/60 backdrop-blur-sm [&_tr]:border-b">
+        <tr class="border-b border-border">
           {#each columns as col (col.key)}
-            <td class={cn('px-4 py-2.5 align-middle', col.class)}>
-              {#if col.cell}
-                {@render col.cell(row)}
-              {:else}
-                <span>{(col.accessor?.(row) ?? defaultAccess(row, col.key) ?? '—') as string}</span>
-              {/if}
-            </td>
+            <th
+              class={cn(
+                'h-10 px-3 text-left align-middle text-xs font-medium text-muted-foreground select-none',
+                col.sortable && 'cursor-pointer hover:text-foreground',
+                col.class
+              )}
+              onclick={() => toggleSort(col)}
+            >
+              <div class="flex items-center gap-1">
+                <span>{col.header}</span>
+                {#if col.sortable}
+                  {#if sortKey === col.key}
+                    {#if sortDir === 'asc'}
+                      <ArrowUp class="h-3 w-3 text-primary" />
+                    {:else}
+                      <ArrowDown class="h-3 w-3 text-primary" />
+                    {/if}
+                  {:else}
+                    <ArrowUpDown class="h-3 w-3 opacity-30" />
+                  {/if}
+                {/if}
+              </div>
+            </th>
           {/each}
         </tr>
-      {:else}
-        <tr>
-          <td colspan={columns.length} class="py-10 text-center text-sm text-muted-foreground">
-            {emptyLabel}
-          </td>
-        </tr>
-      {/each}
-    </tbody>
-  </table>
+      </thead>
+      <tbody class="[&_tr:last-child]:border-0">
+        {#each processed as row, i (rowKey ? rowKey(row, i) : i)}
+          {@const key = rowKey ? rowKey(row, i) : i}
+          {@const isSelected = selectedKey != null && key === selectedKey}
+          <tr
+            class={cn(
+              'border-b border-border/60 transition-colors',
+              onRowClick && 'cursor-pointer hover:bg-muted/40',
+              isSelected && 'bg-primary/8 hover:bg-primary/10'
+            )}
+            onclick={() => onRowClick?.(row)}
+          >
+            {#each columns as col (col.key)}
+              <td class={cn('px-3 py-2.5 align-middle', col.class)}>
+                {#if col.cell}
+                  {@render col.cell(row)}
+                {:else}
+                  <span class="text-sm">
+                    {(col.accessor?.(row) ?? defaultAccess(row, col.key) ?? '—') as string}
+                  </span>
+                {/if}
+              </td>
+            {/each}
+          </tr>
+        {:else}
+          <tr>
+            <td colspan={columns.length} class="py-16 text-center text-sm text-muted-foreground">
+              {emptyLabel}
+            </td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  </div>
 </div>

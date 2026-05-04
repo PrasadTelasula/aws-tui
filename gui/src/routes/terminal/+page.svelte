@@ -1,9 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { get } from 'svelte/store';
-  import PageHeader from '$lib/components/app-shell/page-header.svelte';
   import { Badge, Button } from '$lib/components/ui';
-  import { TerminalSquare, X } from 'lucide-svelte';
+  import { TerminalSquare, Trash2 } from 'lucide-svelte';
   import { ipc } from '$lib/ipc';
   import { profile, region } from '$lib/stores/aws';
 
@@ -26,11 +25,27 @@
       fontFamily: 'var(--font-mono)',
       fontSize: 13,
       theme: {
-        background: '#0f1114',
-        foreground: '#d4d4d4',
-        cursor: '#ed8936',
-        cursorAccent: '#0f1114',
-        selectionBackground: 'rgba(237, 137, 54, 0.3)'
+        background: '#0d1117',
+        foreground: '#e6edf3',
+        cursor: '#f78166',
+        cursorAccent: '#0d1117',
+        selectionBackground: 'rgba(247, 129, 102, 0.25)',
+        black: '#0d1117',
+        brightBlack: '#6e7681',
+        red: '#ff7b72',
+        brightRed: '#ffa198',
+        green: '#3fb950',
+        brightGreen: '#56d364',
+        yellow: '#d29922',
+        brightYellow: '#e3b341',
+        blue: '#58a6ff',
+        brightBlue: '#79c0ff',
+        magenta: '#bc8cff',
+        brightMagenta: '#d2a8ff',
+        cyan: '#39c5cf',
+        brightCyan: '#56d4dd',
+        white: '#b1bac4',
+        brightWhite: '#f0f6fc'
       },
       cursorBlink: true,
       scrollback: 10000,
@@ -81,34 +96,34 @@
     if (connected) ipc.ptyClose(ptyId).catch(() => {});
     term?.dispose();
   });
-
-  function clearTerm() {
-    term?.clear();
-  }
 </script>
 
-<div class="flex h-full flex-col gap-4 px-6 py-5">
-  <PageHeader
-    title="Terminal"
-    subtitle="Embedded shell with AWS_PROFILE and AWS_REGION pre-set."
-  >
-    {#snippet actions()}
-      <Badge variant={connected ? 'ok' : 'muted'}>
+<div class="flex h-full flex-col">
+  <!-- Toolbar -->
+  <div class="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-card/40 px-4">
+    <div class="flex items-center gap-2">
+      <TerminalSquare class="h-4 w-4 text-muted-foreground" />
+      <h1 class="text-sm font-semibold">Terminal</h1>
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="font-mono text-[11px] text-muted-foreground">{$profile}</span>
+      <span class="text-muted-foreground/40">·</span>
+      <span class="font-mono text-[11px] text-muted-foreground">{$region}</span>
+    </div>
+
+    <div class="ml-auto flex items-center gap-2">
+      <Badge variant={connected ? 'ok' : 'muted'} class="text-[10px]">
         {connected ? 'connected' : 'disconnected'}
       </Badge>
-      <Button variant="outline" size="sm" onclick={clearTerm}>
-        <X class="h-3.5 w-3.5" /> Clear
+      <Button variant="ghost" size="sm" class="h-7 px-2" onclick={() => term?.clear()}>
+        <Trash2 class="h-3.5 w-3.5" />
+        Clear
       </Button>
-    {/snippet}
-  </PageHeader>
-
-  <div
-    class="flex min-h-0 flex-1 flex-col rounded-lg border border-border bg-[#0f1114] p-2 shadow-inner"
-  >
-    <div class="flex items-center gap-2 border-b border-white/5 px-2 py-1.5 text-xs text-white/60">
-      <TerminalSquare class="h-3.5 w-3.5" />
-      <span class="font-mono">pty · {$profile} · {$region}</span>
     </div>
-    <div bind:this={container} class="min-h-0 flex-1 p-2"></div>
+  </div>
+
+  <!-- Terminal -->
+  <div class="min-h-0 flex-1 bg-[#0d1117]">
+    <div bind:this={container} class="h-full p-2"></div>
   </div>
 </div>

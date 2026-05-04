@@ -3,8 +3,8 @@
   import { navEntries } from '$lib/nav';
   import { profile, region, aliasesPath, aliases } from '$lib/stores/aws';
   import { ipc } from '$lib/ipc';
-  import { Badge, Input } from '$lib/components/ui';
-  import { FolderOpen, Moon, Sun } from 'lucide-svelte';
+  import { Input } from '$lib/components/ui';
+  import { FolderOpen, Moon, Sun, ChevronRight } from 'lucide-svelte';
 
   let current = $derived(
     navEntries.find((e) =>
@@ -40,46 +40,64 @@
 </script>
 
 <header
-  class="app-chrome-drag flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border bg-background/80 px-6 backdrop-blur"
+  class="app-chrome-drag flex h-12 shrink-0 items-center gap-3 border-b border-border bg-background/95 px-4 backdrop-blur"
 >
-  <div class="flex flex-col">
-    <h1 class="text-base font-semibold leading-none tracking-tight">
-      {current?.label ?? 'AWS TUI'}
-    </h1>
+  <!-- Breadcrumb -->
+  <div class="flex items-center gap-1.5 text-sm">
+    <span class="font-medium text-muted-foreground/60">AWS TUI</span>
     {#if current}
-      <p class="mt-1 text-xs text-muted-foreground">{current.description}</p>
+      <ChevronRight class="h-3.5 w-3.5 text-muted-foreground/40" />
+      <span class="font-medium text-foreground">{current.label}</span>
     {/if}
   </div>
 
-  <div class="app-chrome-no-drag flex items-center gap-3">
+  <div class="app-chrome-no-drag ml-auto flex items-center gap-1.5">
+    <!-- Aliases file picker -->
     <button
       type="button"
       onclick={pickFile}
       title={$aliasesPath ?? 'No aliases file loaded'}
-      class="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-background px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      class="inline-flex h-7 items-center gap-1.5 rounded-md border border-border/60 bg-muted/40 px-2.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
     >
-      <FolderOpen class="h-3.5 w-3.5" />
-      <span class="font-mono">{basename ?? 'Load aliases…'}</span>
+      <FolderOpen class="h-3 w-3" />
+      <span class="font-mono">{basename ?? 'Aliases…'}</span>
     </button>
 
-    <div class="flex items-center gap-2 text-xs">
-      <Badge variant="muted">Profile</Badge>
-      <Input class="h-8 w-28 font-mono text-xs" bind:value={$profile} spellcheck={false} />
+    <div class="mx-1 h-4 w-px bg-border"></div>
+
+    <!-- Profile -->
+    <div class="flex items-center gap-1.5">
+      <span class="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Profile</span>
+      <Input
+        class="h-7 w-24 rounded-md border-border/60 bg-muted/40 px-2 font-mono text-[11px] focus-visible:ring-1"
+        bind:value={$profile}
+        spellcheck={false}
+      />
     </div>
-    <div class="flex items-center gap-2 text-xs">
-      <Badge variant="muted">Region</Badge>
-      <Input class="h-8 w-32 font-mono text-xs" bind:value={$region} spellcheck={false} />
+
+    <!-- Region -->
+    <div class="flex items-center gap-1.5">
+      <span class="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Region</span>
+      <Input
+        class="h-7 w-28 rounded-md border-border/60 bg-muted/40 px-2 font-mono text-[11px] focus-visible:ring-1"
+        bind:value={$region}
+        spellcheck={false}
+      />
     </div>
+
+    <div class="mx-1 h-4 w-px bg-border"></div>
+
+    <!-- Theme toggle -->
     <button
       type="button"
       onclick={toggleTheme}
       aria-label="Toggle theme"
-      class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
     >
       {#if dark}
-        <Sun class="h-4 w-4" />
+        <Sun class="h-3.5 w-3.5" />
       {:else}
-        <Moon class="h-4 w-4" />
+        <Moon class="h-3.5 w-3.5" />
       {/if}
     </button>
   </div>

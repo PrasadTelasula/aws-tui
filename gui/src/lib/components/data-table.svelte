@@ -128,7 +128,7 @@
             class={cn(
               'border-b border-border/60 transition-colors',
               onRowClick && 'cursor-pointer hover:bg-muted/40',
-              isSelected && 'bg-primary/8 hover:bg-primary/10'
+              isSelected && 'bg-primary/10 hover:bg-primary/[0.13]'
             )}
             onclick={() => onRowClick?.(row)}
           >

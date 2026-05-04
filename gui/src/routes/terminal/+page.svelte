@@ -1,10 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { get } from 'svelte/store';
-  import { Badge, Button } from '$lib/components/ui';
-  import { TerminalSquare, Trash2 } from 'lucide-svelte';
   import { ipc } from '$lib/ipc';
   import { profile, region } from '$lib/stores/aws';
+  import { Trash2, TerminalSquare, CircleDot } from 'lucide-svelte';
 
   let container: HTMLDivElement;
   let term: any = null;
@@ -24,13 +23,14 @@
     term = new Terminal({
       fontFamily: 'var(--font-mono)',
       fontSize: 13,
+      lineHeight: 1.5,
       theme: {
         background: '#0d1117',
         foreground: '#e6edf3',
-        cursor: '#f78166',
+        cursor: '#e6edf3',
         cursorAccent: '#0d1117',
-        selectionBackground: 'rgba(247, 129, 102, 0.25)',
-        black: '#0d1117',
+        selectionBackground: 'rgba(175, 127, 57, 0.3)',
+        black: '#21262d',
         brightBlack: '#6e7681',
         red: '#ff7b72',
         brightRed: '#ffa198',
@@ -48,6 +48,7 @@
         brightWhite: '#f0f6fc'
       },
       cursorBlink: true,
+      cursorStyle: 'bar',
       scrollback: 10000,
       convertEol: true
     });
@@ -62,7 +63,7 @@
       unlistenData = await ipc.onPtyData(ptyId, (chunk) => term.write(chunk));
       unlistenExit = await ipc.onPtyExit(ptyId, () => {
         connected = false;
-        term.writeln('\r\n\x1b[1;31m[process exited]\x1b[0m');
+        term.writeln('\r\n\x1b[2m[process exited]\x1b[0m');
       });
 
       await ipc.ptyOpen(ptyId, {
@@ -98,32 +99,43 @@
   });
 </script>
 
-<div class="flex h-full flex-col">
-  <!-- Toolbar -->
-  <div class="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-card/40 px-4">
-    <div class="flex items-center gap-2">
-      <TerminalSquare class="h-4 w-4 text-muted-foreground" />
-      <h1 class="text-sm font-semibold">Terminal</h1>
-    </div>
-    <div class="flex items-center gap-2">
-      <span class="font-mono text-[11px] text-muted-foreground">{$profile}</span>
-      <span class="text-muted-foreground/40">·</span>
-      <span class="font-mono text-[11px] text-muted-foreground">{$region}</span>
+<div class="flex h-full flex-col bg-[#0d1117]">
+  <!-- Terminal toolbar -->
+  <div class="flex h-10 shrink-0 items-center gap-3 border-b border-white/5 bg-[#161b22] px-4">
+    <TerminalSquare class="h-3.5 w-3.5 text-white/30" />
+    <span class="text-xs font-medium text-white/50">Terminal</span>
+
+    <!-- Profile · Region -->
+    <div class="flex items-center gap-1.5">
+      <span class="h-3 w-px bg-white/10"></span>
+      <span class="font-mono text-[11px] text-white/30">{$profile}</span>
+      <span class="text-white/20">·</span>
+      <span class="font-mono text-[11px] text-white/30">{$region}</span>
     </div>
 
-    <div class="ml-auto flex items-center gap-2">
-      <Badge variant={connected ? 'ok' : 'muted'} class="text-[10px]">
-        {connected ? 'connected' : 'disconnected'}
-      </Badge>
-      <Button variant="ghost" size="sm" class="h-7 px-2" onclick={() => term?.clear()}>
-        <Trash2 class="h-3.5 w-3.5" />
+    <!-- Status dot -->
+    <div class="ml-auto flex items-center gap-3">
+      <div class="flex items-center gap-1.5">
+        <span class={connected
+          ? 'h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_6px_theme(colors.emerald.500)]'
+          : 'h-1.5 w-1.5 rounded-full bg-white/20'
+        }></span>
+        <span class="text-[11px] text-white/40">{connected ? 'connected' : 'disconnected'}</span>
+      </div>
+
+      <!-- Clear button -->
+      <button
+        onclick={() => term?.clear()}
+        class="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-white/30 transition-colors hover:bg-white/5 hover:text-white/60"
+      >
+        <Trash2 class="h-3 w-3" />
         Clear
-      </Button>
+      </button>
     </div>
   </div>
 
-  <!-- Terminal -->
-  <div class="min-h-0 flex-1 bg-[#0d1117]">
-    <div bind:this={container} class="h-full p-2"></div>
+  <!-- Terminal canvas -->
+  <div class="min-h-0 flex-1">
+    <div bind:this={container} class="h-full px-2 py-1.5"></div>
   </div>
 </div>

@@ -10,17 +10,17 @@
     RefreshCw,
     Search,
     Terminal,
-    X,
-    Globe,
     Server,
+    Copy,
+    MapPin,
+    Cpu,
     Network,
+    Globe,
     Tag,
     ChevronDown,
     ChevronUp,
-    ArrowUp,
-    ArrowDown,
-    ArrowUpDown,
-    MapPin
+    Loader2,
+    PlugZap
   } from 'lucide-svelte';
   import { cn } from '$lib/utils';
 
@@ -29,19 +29,7 @@
   let tagsOpen = $state(true);
   let termInstance = $state<Instance | null>(null);
   let termKey = $state(0);
-
-  // Sorting
-  let sortKey = $state<keyof Instance | null>(null);
-  let sortDir = $state<'asc' | 'desc'>('asc');
-
-  function toggleSort(key: keyof Instance) {
-    if (sortKey === key) {
-      sortDir = sortDir === 'asc' ? 'desc' : 'asc';
-    } else {
-      sortKey = key;
-      sortDir = 'asc';
-    }
-  }
+  let copiedIp = $state<string | null>(null);
 
   async function refresh() {
     loading.update((l) => ({ ...l, instances: true }));
@@ -61,43 +49,27 @@
     termKey += 1;
   }
 
-  function stateDotClass(s: string): string {
-    if (s === 'running') return 'bg-status-ok shadow-[0_0_6px_theme(colors.status.ok/0.5)]';
-    if (s === 'pending' || s === 'stopping') return 'bg-status-warn';
-    if (s === 'terminated' || s === 'shutting-down') return 'bg-status-error';
-    return 'bg-muted-foreground/40';
-  }
-
-  function stateTextClass(s: string): string {
+  function stateColor(s: string) {
     if (s === 'running') return 'text-status-ok';
     if (s === 'pending' || s === 'stopping') return 'text-status-warn';
     if (s === 'terminated' || s === 'shutting-down') return 'text-status-error';
-    return 'text-muted-foreground';
+    return 'text-muted-foreground/50';
   }
 
-  let filtered = $derived.by(() => {
-    const f = filter.trim().toLowerCase();
-    let rows = f
-      ? $instances.filter((i) =>
-          [i.id, i.name, i.state, i.instanceType, i.privateIp, i.az]
-            .filter(Boolean)
-            .some((v) => v!.toLowerCase().includes(f))
-        )
-      : $instances;
+  function stateDot(s: string) {
+    if (s === 'running') return 'bg-status-ok shadow-[0_0_8px_theme(colors.status.ok/60%)]';
+    if (s === 'pending' || s === 'stopping') return 'bg-status-warn';
+    if (s === 'terminated' || s === 'shutting-down') return 'bg-status-error';
+    return 'bg-muted-foreground/30';
+  }
 
-    if (sortKey) {
-      const k = sortKey;
-      rows = [...rows].sort((a, b) => {
-        const av = String(a[k] ?? '');
-        const bv = String(b[k] ?? '');
-        const cmp = av.localeCompare(bv);
-        return sortDir === 'asc' ? cmp : -cmp;
-      });
-    }
-    return rows;
-  });
+  function statePill(s: string) {
+    if (s === 'running') return 'bg-status-ok/12 text-status-ok border-status-ok/20';
+    if (s === 'pending' || s === 'stopping') return 'bg-status-warn/12 text-status-warn border-status-warn/20';
+    if (s === 'terminated' || s === 'shutting-down') return 'bg-status-error/12 text-status-error border-status-error/20';
+    return 'bg-muted/50 text-muted-foreground border-border';
+  }
 
-  let copiedIp = $state<string | null>(null);
   async function copyIp(ip: string) {
     try {
       const { writeText } = await import('@tauri-apps/plugin-clipboard-manager');
@@ -106,334 +78,304 @@
       try { await navigator.clipboard.writeText(ip); } catch { return; }
     }
     copiedIp = ip;
-    setTimeout(() => { if (copiedIp === ip) copiedIp = null; }, 1200);
+    setTimeout(() => { if (copiedIp === ip) copiedIp = null; }, 1500);
   }
+
+  let filtered = $derived.by(() => {
+    const f = filter.trim().toLowerCase();
+    return f
+      ? $instances.filter((i) =>
+          [i.id, i.name, i.state, i.instanceType, i.privateIp, i.az]
+            .filter(Boolean)
+            .some((v) => v!.toLowerCase().includes(f))
+        )
+      : $instances;
+  });
+
+  let runningCount = $derived($instances.filter((i) => i.state === 'running').length);
 </script>
 
 <div class="flex h-full flex-col">
   <!-- Toolbar -->
-  <div class="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-card/40 px-4">
-    <div class="flex items-center gap-2">
-      <Server class="h-4 w-4 text-muted-foreground" />
-      <h1 class="text-sm font-semibold">EC2 Instances</h1>
-      {#if $instances.length > 0}
-        <span class="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
-          {filter ? `${filtered.length}/` : ''}{$instances.length}
+  <div class="flex h-11 shrink-0 items-center gap-3 border-b border-border bg-card/30 px-4">
+    <Server class="h-4 w-4 text-muted-foreground/60" />
+    <span class="text-sm font-semibold">EC2 Instances</span>
+    {#if $instances.length > 0}
+      <div class="flex items-center gap-1.5">
+        <span class="rounded-full bg-muted px-2 py-0.5 text-[11px] tabular-nums text-muted-foreground">
+          {$instances.length} total
         </span>
-      {/if}
-    </div>
-
-    <!-- Search -->
-    <div class="relative ml-2">
-      <Search class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
-      <input
-        class="h-8 w-52 rounded-md border border-border bg-background pl-8 pr-3 text-xs placeholder:text-muted-foreground/50 focus:border-primary/40 focus:outline-none focus:ring-2 focus:ring-primary/10"
-        placeholder="Filter instances…"
-        bind:value={filter}
-      />
-    </div>
-
+        {#if runningCount > 0}
+          <span class="rounded-full bg-status-ok/15 px-2 py-0.5 text-[11px] tabular-nums text-status-ok">
+            {runningCount} running
+          </span>
+        {/if}
+      </div>
+    {/if}
     <Button
-      variant="outline"
+      variant="ghost"
       size="sm"
       onclick={refresh}
       disabled={$loading.instances}
-      class="ml-auto h-8"
+      class="ml-auto h-8 text-muted-foreground hover:text-foreground"
     >
       <RefreshCw class={'h-3.5 w-3.5 ' + ($loading.instances ? 'animate-spin' : '')} />
       Refresh
     </Button>
   </div>
 
-  <!-- Main split: table + detail panel (always rendered) -->
+  <!-- Masterlist layout -->
   <div class="flex min-h-0 flex-1">
-    <!-- Table area -->
-    <div class="flex min-w-0 flex-1 flex-col overflow-hidden">
+    <!-- LEFT: instance list -->
+    <div class="flex w-80 shrink-0 flex-col border-r border-border bg-sidebar-background">
+      <!-- Search -->
+      <div class="border-b border-border/60 p-2.5">
+        <div class="relative">
+          <Search class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/40" />
+          <input
+            class="h-8 w-full rounded-md border border-border/60 bg-background/60 pl-8 pr-3 text-xs placeholder:text-muted-foreground/40 focus:border-primary/50 focus:bg-background focus:outline-none focus:ring-2 focus:ring-primary/10"
+            placeholder="Search instances…"
+            bind:value={filter}
+          />
+        </div>
+        {#if filter}
+          <p class="mt-1.5 px-0.5 text-[10px] text-muted-foreground/60">
+            {filtered.length} of {$instances.length} results
+          </p>
+        {/if}
+      </div>
+
+      <!-- Instance list -->
       <div class="min-h-0 flex-1 overflow-auto">
-        <table class="w-full caption-bottom">
-          <thead class="sticky top-0 z-10 border-b border-border bg-card/90 backdrop-blur-sm">
-            <tr>
-              {#each [
-                { key: 'name', label: 'Instance', sortable: true },
-                { key: 'state', label: 'State', sortable: true },
-                { key: 'instanceType', label: 'Type', sortable: true },
-                { key: 'privateIp', label: 'Private IP', sortable: false },
-                { key: 'az', label: 'AZ', sortable: true }
-              ] as col (col.key)}
-                <th
-                  class={cn(
-                    'h-10 px-3 text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70 select-none',
-                    col.sortable && 'cursor-pointer hover:text-foreground'
-                  )}
-                  onclick={() => col.sortable && toggleSort(col.key as keyof Instance)}
-                >
-                  <div class="flex items-center gap-1">
-                    {col.label}
-                    {#if col.sortable}
-                      {#if sortKey === col.key}
-                        {#if sortDir === 'asc'}
-                          <ArrowUp class="h-3 w-3 text-primary" />
-                        {:else}
-                          <ArrowDown class="h-3 w-3 text-primary" />
-                        {/if}
-                      {:else}
-                        <ArrowUpDown class="h-3 w-3 opacity-30" />
-                      {/if}
-                    {/if}
-                  </div>
-                </th>
-              {/each}
-            </tr>
-          </thead>
-          <tbody>
-            {#each filtered as inst (inst.id)}
-              {@const isSelected = selected?.id === inst.id}
-              <tr
-                class={cn(
-                  'group border-b border-border/50 transition-colors cursor-pointer',
-                  isSelected
-                    ? 'bg-primary/10 hover:bg-primary/[0.13]'
-                    : 'hover:bg-muted/40'
-                )}
-                onclick={() => { selected = inst; tagsOpen = true; }}
-              >
-                <!-- Name + ID stacked -->
-                <td class="px-3 py-2.5">
-                  <div class="flex items-center gap-2">
-                    {#if isSelected}
-                      <div class="h-full w-0.5 self-stretch rounded-full bg-primary/60 -ml-3 mr-1"></div>
-                    {/if}
-                    <div class="min-w-0">
-                      <p class="truncate text-sm font-medium leading-tight">
-                        {inst.name ?? inst.id}
-                      </p>
-                      {#if inst.name}
-                        <p class="truncate font-mono text-[10px] text-muted-foreground leading-tight mt-0.5">
-                          {inst.id}
-                        </p>
-                      {/if}
-                    </div>
-                  </div>
-                </td>
-                <!-- State dot + text -->
-                <td class="px-3 py-2.5">
-                  <div class="flex items-center gap-1.5">
-                    <span class={cn('h-1.5 w-1.5 rounded-full shrink-0', stateDotClass(inst.state))}></span>
-                    <span class={cn('text-xs font-medium', stateTextClass(inst.state))}>
-                      {inst.state}
+        {#if $loading.instances}
+          <div class="flex flex-col items-center justify-center gap-2.5 py-12 text-center">
+            <Loader2 class="h-5 w-5 animate-spin text-muted-foreground/40" />
+            <p class="text-xs text-muted-foreground/60">Loading instances…</p>
+          </div>
+        {:else if filtered.length === 0}
+          <div class="flex flex-col items-center justify-center gap-2 py-12 text-center">
+            <Server class="h-8 w-8 text-muted-foreground/20" />
+            <p class="text-xs text-muted-foreground/60">
+              {filter ? 'No instances match' : 'No instances found'}
+            </p>
+          </div>
+        {:else}
+          {#each filtered as inst (inst.id)}
+            {@const isSelected = selected?.id === inst.id}
+            <button
+              class={cn(
+                'group relative w-full border-b border-border/30 px-3.5 py-3 text-left transition-colors',
+                isSelected ? 'bg-accent/60' : 'hover:bg-accent/25'
+              )}
+              onclick={() => { selected = inst; tagsOpen = true; }}
+            >
+              <!-- Selection accent -->
+              <div class={cn(
+                'absolute inset-y-0 left-0 w-0.5 transition-all',
+                isSelected ? stateDot(inst.state).includes('ok') ? 'bg-status-ok' : stateDot(inst.state).includes('warn') ? 'bg-status-warn' : stateDot(inst.state).includes('error') ? 'bg-status-error' : 'bg-primary' : 'bg-transparent'
+              )}></div>
+
+              <div class="flex items-start gap-2.5">
+                <!-- Status dot -->
+                <div class={cn('mt-[5px] h-2 w-2 shrink-0 rounded-full', stateDot(inst.state))}></div>
+
+                <!-- Info -->
+                <div class="min-w-0 flex-1">
+                  <p class={cn(
+                    'truncate text-[13px] font-medium leading-tight',
+                    isSelected ? 'text-foreground' : 'text-foreground/90'
+                  )}>
+                    {inst.name ?? inst.id}
+                  </p>
+                  {#if inst.name}
+                    <p class="mt-0.5 truncate font-mono text-[10px] text-muted-foreground/60">
+                      {inst.id}
+                    </p>
+                  {/if}
+                  <div class="mt-1.5 flex items-center gap-1.5">
+                    <span class="rounded bg-muted/70 px-1.5 py-0.5 font-mono text-[10px] text-foreground/60">
+                      {inst.instanceType}
                     </span>
+                    {#if inst.az}
+                      <span class="text-[10px] text-muted-foreground/50">{inst.az}</span>
+                    {/if}
                   </div>
-                </td>
-                <!-- Type badge -->
-                <td class="px-3 py-2.5">
-                  <span class="rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[11px] text-foreground/80">
-                    {inst.instanceType}
-                  </span>
-                </td>
-                <!-- IP copyable -->
-                <td class="px-3 py-2.5">
-                  {#if inst.privateIp}
-                    <button
-                      onclick={(e) => { e.stopPropagation(); copyIp(inst.privateIp!); }}
-                      class="font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
-                      title="Click to copy"
-                    >
-                      {copiedIp === inst.privateIp ? '✓ copied' : inst.privateIp}
-                    </button>
-                  {:else}
-                    <span class="text-xs text-muted-foreground/40">—</span>
-                  {/if}
-                </td>
-                <!-- AZ -->
-                <td class="px-3 py-2.5">
-                  <span class="font-mono text-xs text-muted-foreground">{inst.az ?? '—'}</span>
-                </td>
-              </tr>
-            {:else}
-              <tr>
-                <td colspan="5" class="py-16 text-center">
-                  {#if $loading.instances}
-                    <div class="flex items-center justify-center gap-2 text-sm text-muted-foreground">
-                      <RefreshCw class="h-4 w-4 animate-spin" />
-                      Loading instances…
-                    </div>
-                  {:else}
-                    <p class="text-sm text-muted-foreground">No instances found</p>
-                  {/if}
-                </td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
+                </div>
+
+                <!-- State text (right-aligned) -->
+                <span class={cn('shrink-0 text-[10px] font-medium', stateColor(inst.state))}>
+                  {inst.state}
+                </span>
+              </div>
+            </button>
+          {/each}
+        {/if}
       </div>
     </div>
 
-    <!-- Detail panel — always visible -->
-    <div class="flex w-72 shrink-0 flex-col border-l border-border bg-card/20">
+    <!-- RIGHT: detail pane -->
+    <div class="flex min-w-0 flex-1 flex-col overflow-hidden">
       {#if selected}
         {@const inst = selected}
-        <!-- Panel header -->
-        <div class="flex items-start justify-between gap-2 border-b border-border px-4 py-3">
-          <div class="min-w-0 flex-1">
-            <div class="flex items-center gap-2">
-              <span class={cn('h-2 w-2 shrink-0 rounded-full', stateDotClass(inst.state))}></span>
-              <p class="truncate font-mono text-sm font-semibold leading-snug">
-                {inst.name ?? inst.id}
-              </p>
-            </div>
-            {#if inst.name}
-              <p class="mt-0.5 truncate pl-4 font-mono text-[10px] text-muted-foreground">{inst.id}</p>
-            {/if}
-          </div>
-          <button
-            onclick={() => { selected = null; }}
-            class="mt-0.5 shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <X class="h-3.5 w-3.5" />
-          </button>
-        </div>
-
-        <!-- Connect button (if running) -->
-        {#if inst.state === 'running'}
-          <div class="border-b border-border px-4 py-3">
-            <Button
-              size="sm"
-              class="w-full"
-              onclick={() => connectSsm(inst)}
-            >
-              <Terminal class="h-3.5 w-3.5" />
-              Open SSM Shell
-            </Button>
-          </div>
-        {/if}
-
-        <!-- Detail rows -->
-        <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
-          <div class="space-y-3">
-
-            <!-- State + type -->
-            <div class="rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5 text-xs">
-              <div class="flex items-center justify-between">
-                <span class="text-muted-foreground">State</span>
-                <span class={cn('font-medium', stateTextClass(inst.state))}>{inst.state}</span>
+        <div class="min-h-0 flex-1 overflow-auto">
+          <!-- Hero header -->
+          <div class="border-b border-border/60 px-8 py-6">
+            <div class="flex items-start justify-between gap-4">
+              <div class="min-w-0 flex-1">
+                <h1 class="truncate text-[22px] font-bold tracking-tight">
+                  {inst.name ?? inst.id}
+                </h1>
+                {#if inst.name}
+                  <p class="mt-1 font-mono text-xs text-muted-foreground/60">{inst.id}</p>
+                {/if}
               </div>
-              <div class="mt-1.5 flex items-center justify-between">
-                <span class="text-muted-foreground">Type</span>
-                <span class="rounded bg-muted/80 px-1.5 py-0.5 font-mono text-[11px]">{inst.instanceType}</span>
-              </div>
+              <!-- Status pill -->
+              <span class={cn(
+                'shrink-0 mt-0.5 inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold',
+                statePill(inst.state)
+              )}>
+                <span class={cn('h-1.5 w-1.5 rounded-full', stateDot(inst.state))}></span>
+                {inst.state}
+              </span>
             </div>
 
-            <!-- Network -->
-            <div>
-              <p class="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">Network</p>
-              <div class="space-y-1.5">
+            <!-- Quick-info chips -->
+            <div class="mt-4 flex flex-wrap items-center gap-2">
+              <span class="inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-muted/40 px-2.5 py-1 text-xs">
+                <Cpu class="h-3 w-3 text-muted-foreground/60" />
+                <span class="font-mono font-medium">{inst.instanceType}</span>
+              </span>
+              {#if inst.az}
+                <span class="inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-muted/40 px-2.5 py-1 text-xs text-muted-foreground">
+                  <MapPin class="h-3 w-3" />
+                  {inst.az}
+                </span>
+              {/if}
+              {#if inst.vpcId}
+                <span class="inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/40 px-2.5 py-1 font-mono text-[11px] text-muted-foreground">
+                  {inst.vpcId}
+                </span>
+              {/if}
+            </div>
+          </div>
+
+          <!-- Network section -->
+          {#if inst.privateIp || inst.publicIp}
+            <div class="border-b border-border/40 px-8 py-5">
+              <h3 class="mb-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50">
+                Network
+              </h3>
+              <div class="grid grid-cols-2 gap-3">
                 {#if inst.privateIp}
-                  <div class="flex items-center gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-muted/40">
-                    <Network class="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
-                    <div class="min-w-0 flex-1">
-                      <p class="text-[10px] text-muted-foreground">Private IP</p>
-                      <button
-                        onclick={() => copyIp(inst.privateIp!)}
-                        class="font-mono text-xs hover:text-primary transition-colors"
-                        title="Click to copy"
-                      >
-                        {copiedIp === inst.privateIp ? '✓ copied' : inst.privateIp}
-                      </button>
+                  <button
+                    onclick={() => copyIp(inst.privateIp!)}
+                    class="group/ip relative rounded-xl border border-border/60 bg-card px-4 py-3.5 text-left transition-all hover:border-primary/30 hover:bg-primary/5 hover:shadow-sm"
+                  >
+                    <div class="flex items-center gap-1.5 text-[10px] text-muted-foreground/60">
+                      <Network class="h-3 w-3" />
+                      <span class="uppercase tracking-wider">Private IP</span>
                     </div>
-                  </div>
+                    <p class="mt-1.5 font-mono text-sm font-semibold">
+                      {copiedIp === inst.privateIp ? '✓ Copied!' : inst.privateIp}
+                    </p>
+                    <Copy class="absolute right-3 top-3 h-3.5 w-3.5 text-transparent transition-colors group-hover/ip:text-muted-foreground/40" />
+                  </button>
                 {/if}
                 {#if inst.publicIp}
-                  <div class="flex items-center gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-muted/40">
-                    <Globe class="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
-                    <div class="min-w-0 flex-1">
-                      <p class="text-[10px] text-muted-foreground">Public IP</p>
-                      <button
-                        onclick={() => copyIp(inst.publicIp!)}
-                        class="font-mono text-xs hover:text-primary transition-colors"
-                        title="Click to copy"
-                      >
-                        {copiedIp === inst.publicIp ? '✓ copied' : inst.publicIp}
-                      </button>
+                  <button
+                    onclick={() => copyIp(inst.publicIp!)}
+                    class="group/ip relative rounded-xl border border-border/60 bg-card px-4 py-3.5 text-left transition-all hover:border-primary/30 hover:bg-primary/5 hover:shadow-sm"
+                  >
+                    <div class="flex items-center gap-1.5 text-[10px] text-muted-foreground/60">
+                      <Globe class="h-3 w-3" />
+                      <span class="uppercase tracking-wider">Public IP</span>
                     </div>
-                  </div>
-                {/if}
-                {#if inst.az}
-                  <div class="flex items-center gap-2 rounded-md px-2 py-1.5">
-                    <MapPin class="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
-                    <div class="min-w-0 flex-1">
-                      <p class="text-[10px] text-muted-foreground">Availability Zone</p>
-                      <p class="font-mono text-xs">{inst.az}</p>
-                    </div>
-                  </div>
-                {/if}
-                {#if inst.vpcId}
-                  <div class="flex items-center gap-2 rounded-md px-2 py-1.5">
-                    <Server class="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
-                    <div class="min-w-0 flex-1">
-                      <p class="text-[10px] text-muted-foreground">VPC</p>
-                      <p class="truncate font-mono text-[11px]">{inst.vpcId}</p>
-                    </div>
-                  </div>
+                    <p class="mt-1.5 font-mono text-sm font-semibold">
+                      {copiedIp === inst.publicIp ? '✓ Copied!' : inst.publicIp}
+                    </p>
+                    <Copy class="absolute right-3 top-3 h-3.5 w-3.5 text-transparent transition-colors group-hover/ip:text-muted-foreground/40" />
+                  </button>
                 {/if}
               </div>
             </div>
+          {/if}
 
-            <!-- Tags -->
-            {#if Object.keys(inst.tags).length > 0}
-              <div>
-                <button
-                  onclick={() => (tagsOpen = !tagsOpen)}
-                  class="mb-1.5 flex w-full items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 transition-colors hover:text-muted-foreground"
-                >
+          <!-- Tags section -->
+          {#if Object.keys(inst.tags).length > 0}
+            <div class="border-b border-border/40 px-8 py-5">
+              <button
+                onclick={() => (tagsOpen = !tagsOpen)}
+                class="flex w-full items-center justify-between text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50 transition-colors hover:text-muted-foreground/80"
+              >
+                <span class="flex items-center gap-1.5">
                   <Tag class="h-3 w-3" />
                   Tags ({Object.keys(inst.tags).length})
-                  <span class="ml-auto">
-                    {#if tagsOpen}<ChevronUp class="h-3 w-3" />{:else}<ChevronDown class="h-3 w-3" />{/if}
-                  </span>
-                </button>
+                </span>
                 {#if tagsOpen}
-                  <div class="space-y-1">
-                    {#each Object.entries(inst.tags) as [k, v] (k)}
-                      <div class="flex items-baseline gap-2 rounded-md bg-muted/40 px-2 py-1">
-                        <span class="shrink-0 font-mono text-[10px] text-muted-foreground">{k}</span>
-                        <span class="min-w-0 truncate font-mono text-[11px]">{v}</span>
-                      </div>
-                    {/each}
-                  </div>
+                  <ChevronUp class="h-3 w-3" />
+                {:else}
+                  <ChevronDown class="h-3 w-3" />
                 {/if}
-              </div>
-            {/if}
+              </button>
+              {#if tagsOpen}
+                <div class="mt-3 flex flex-wrap gap-1.5">
+                  {#each Object.entries(inst.tags) as [k, v] (k)}
+                    <span class="inline-flex items-center gap-1 rounded-md border border-border/50 bg-muted/30 px-2 py-1 font-mono text-[11px]">
+                      <span class="text-muted-foreground/70">{k}:</span>
+                      <span class="font-medium">{v}</span>
+                    </span>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/if}
 
-          </div>
+          <!-- SSM Connect CTA -->
+          {#if inst.state === 'running'}
+            <div class="px-8 py-5">
+              <h3 class="mb-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50">
+                Actions
+              </h3>
+              <Button
+                class="gap-2"
+                onclick={() => connectSsm(inst)}
+              >
+                <PlugZap class="h-4 w-4" />
+                Open SSM Shell
+              </Button>
+            </div>
+          {/if}
         </div>
+
+        <!-- SSM Terminal -->
+        {#if termInstance}
+          {@const tinst = termInstance}
+          {@const ptyId = `ssm-${tinst.id}-${termKey}`}
+          <div class="h-72 shrink-0 border-t border-border">
+            <PtyTerminal
+              {ptyId}
+              title="SSM · {tinst.name ?? tinst.id} · {tinst.id}"
+              onReady={async (rows, cols) => {
+                await ipc.ptyOpenSsm(ptyId, tinst.id, get(profile), get(region), rows, cols);
+              }}
+              onClose={() => (termInstance = null)}
+            />
+          </div>
+        {/if}
       {:else}
         <!-- Empty state -->
-        <div class="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-          <div class="rounded-full bg-muted/50 p-3">
-            <Server class="h-6 w-6 text-muted-foreground/40" />
+        <div class="flex flex-1 flex-col items-center justify-center gap-4 text-center">
+          <div class="flex h-16 w-16 items-center justify-center rounded-2xl border border-border/60 bg-card">
+            <Server class="h-7 w-7 text-muted-foreground/30" />
           </div>
           <div>
-            <p class="text-sm font-medium text-muted-foreground">No instance selected</p>
-            <p class="mt-1 text-xs text-muted-foreground/50">Click a row to view details</p>
+            <p class="text-sm font-semibold text-foreground/70">Select an instance</p>
+            <p class="mt-1 text-xs text-muted-foreground/50">
+              Choose from the list on the left to view details and connect
+            </p>
           </div>
         </div>
       {/if}
     </div>
   </div>
-
-  <!-- SSM Terminal panel -->
-  {#if termInstance}
-    {@const inst = termInstance}
-    {@const ptyId = `ssm-${inst.id}-${termKey}`}
-    <div class="h-64 shrink-0 border-t border-border">
-      <PtyTerminal
-        {ptyId}
-        title="SSM · {inst.name ?? inst.id} · {inst.id}"
-        onReady={async (rows, cols) => {
-          await ipc.ptyOpenSsm(ptyId, inst.id, get(profile), get(region), rows, cols);
-        }}
-        onClose={() => (termInstance = null)}
-      />
-    </div>
-  {/if}
 </div>

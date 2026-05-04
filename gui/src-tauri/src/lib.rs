@@ -45,6 +45,8 @@ pub fn run() {
             sessions::check_existing_sso,
             sessions::check_existing_iam,
             pty::pty_open,
+            pty::pty_open_ssm,
+            pty::pty_open_ecs_exec,
             pty::pty_write,
             pty::pty_resize,
             pty::pty_close,

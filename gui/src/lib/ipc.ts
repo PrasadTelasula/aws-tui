@@ -71,14 +71,16 @@ export const ipc = {
   // -------- AWS browsers --------
   listInstances: (profile?: string, region?: string) =>
     invoke<Instance[]>('list_instances', { profile, region }),
-  describeInstance: (id: string) => invoke<unknown>('describe_instance', { id }),
+  describeInstance: (id: string, profile?: string, region?: string) =>
+    invoke<unknown>('describe_instance', { id, profile, region }),
   listClusters: (profile?: string, region?: string) =>
     invoke<Cluster[]>('list_clusters', { profile, region }),
-  listServices: (cluster: string) => invoke<Service[]>('list_services', { cluster }),
-  listTasks: (cluster: string, service?: string) =>
-    invoke<Task[]>('list_tasks', { cluster, service }),
-  listContainers: (taskArn: string) =>
-    invoke<Container[]>('list_containers', { taskArn }),
+  listServices: (cluster: string, profile?: string, region?: string) =>
+    invoke<Service[]>('list_services', { cluster, profile, region }),
+  listTasks: (cluster: string, service?: string, profile?: string, region?: string) =>
+    invoke<Task[]>('list_tasks', { cluster, service, profile, region }),
+  listContainers: (taskArn: string, cluster: string, profile?: string, region?: string) =>
+    invoke<Container[]>('list_containers', { taskArn, cluster, profile, region }),
 
   completeAwsCli: (line: string, cursor: number) =>
     invoke<string[]>('complete_aws_cli', { line, cursor }),
@@ -86,6 +88,36 @@ export const ipc = {
 
   // -------- pty --------
   ptyOpen: (id: string, opts: PtyOpenOpts = {}) => invoke<void>('pty_open', { id, ...opts }),
+  ptyOpenSsm: (
+    id: string,
+    instanceId: string,
+    profile?: string,
+    region?: string,
+    rows?: number,
+    cols?: number
+  ) => invoke<void>('pty_open_ssm', { id, instanceId, profile, region, rows, cols }),
+  ptyOpenEcsExec: (
+    id: string,
+    cluster: string,
+    taskId: string,
+    container: string,
+    shell?: string,
+    profile?: string,
+    region?: string,
+    rows?: number,
+    cols?: number
+  ) =>
+    invoke<void>('pty_open_ecs_exec', {
+      id,
+      cluster,
+      taskId,
+      container,
+      shell,
+      profile,
+      region,
+      rows,
+      cols
+    }),
   ptyWrite: (id: string, data: string) => invoke<void>('pty_write', { id, data }),
   ptyResize: (id: string, rows: number, cols: number) =>
     invoke<void>('pty_resize', { id, rows, cols }),

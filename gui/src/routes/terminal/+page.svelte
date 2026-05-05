@@ -21,7 +21,7 @@
     const { WebLinksAddon } = await import('@xterm/addon-web-links');
 
     term = new Terminal({
-      fontFamily: 'var(--font-mono)',
+      fontFamily: '"JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace',
       fontSize: 13,
       lineHeight: 1.5,
       theme: {

@@ -151,6 +151,16 @@
     font-feature-settings: 'calt', 'ss02';
   }
 
+  /* Form elements inherit font — browsers default to system-ui otherwise */
+  input,
+  textarea,
+  select,
+  button {
+    font-family: inherit;
+    font-feature-settings: inherit;
+    font-variation-settings: inherit;
+  }
+
   /* Scrollbar styling — consistent across all scroll surfaces */
   ::-webkit-scrollbar {
     width: 10px;

@@ -3,9 +3,10 @@
   import { profile, region, aliasesPath, aliases, sessions } from '$lib/stores/aws';
   import { isActive } from '$lib/sessions-helpers';
   import { ipc } from '$lib/ipc';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { clickOutside } from '$lib/utils';
   import StatusDot from '$lib/components/status-dot.svelte';
+  import CommandPalette from '$lib/components/command-palette.svelte';
   import {
     Pulse,
     HardDrives,
@@ -35,6 +36,19 @@
     if (p === '/') return titles['/'];
     return titles[Object.keys(titles).find((k) => k !== '/' && p.startsWith(k)) ?? '/'];
   });
+
+  // ─── Command palette ────────────────────────────────────────────────
+  let cmdOpen = $state(false);
+  function openCmd() { cmdOpen = true; }
+  function closeCmd() { cmdOpen = false; }
+  function onGlobalKey(e: KeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      cmdOpen = !cmdOpen;
+    }
+  }
+  onMount(() => window.addEventListener('keydown', onGlobalKey));
+  onDestroy(() => window.removeEventListener('keydown', onGlobalKey));
 
   let dark = $state(true);
   function toggleTheme() {
@@ -163,7 +177,7 @@
   </div>
 
   <!-- Command palette trigger (placeholder — opens search later) -->
-  <button type="button" class="tui-cmd-trigger" style="margin-left: 12px;" onclick={() => { /* TODO: command palette */ }}>
+  <button type="button" class="tui-cmd-trigger" style="margin-left: 12px;" onclick={openCmd}>
     <span class="tui-cmd-trigger-icon"><MagnifyingGlass size={13} weight="bold" /></span>
     <span>Jump to alias, instance, command…</span>
     <kbd class="tui-kbd">⌘K</kbd>
@@ -300,3 +314,5 @@
     </button>
   </div>
 </header>
+
+<CommandPalette open={cmdOpen} onClose={closeCmd} />

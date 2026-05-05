@@ -578,7 +578,13 @@ body {
   background: var(--tui-bg-3);
   color: var(--tui-fg-3);
 }
-.tui-cmd-trigger > span { flex: 1; }
+.tui-cmd-trigger > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .tui-cmd-trigger-icon { color: var(--tui-fg-4); flex-shrink: 0; display: inline-flex; }
 
 .tui-topbar-spacer { flex: 1; }
@@ -1911,6 +1917,126 @@ body {
 .tui-output-line {
   font-family: var(--tui-font-term);
   font-size: 12px;
+}
+
+/* ───── Command palette ───── */
+.tui-cmd-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 14vh;
+  z-index: 100;
+  animation: tui-cmd-fade .12s ease-out;
+}
+@keyframes tui-cmd-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.tui-cmd-panel {
+  width: 100%;
+  max-width: 580px;
+  background: var(--tui-bg-1);
+  border: 1px solid var(--tui-line-2);
+  border-radius: var(--tui-r-lg);
+  box-shadow: 0 24px 60px -12px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.02);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.tui-cmd-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--tui-line);
+  color: var(--tui-fg-3);
+}
+.tui-cmd-input {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: var(--tui-fg);
+  font-size: 14px;
+  font-family: var(--tui-font-sans);
+  min-width: 0;
+}
+.tui-cmd-input::placeholder { color: var(--tui-fg-4); }
+.tui-cmd-results {
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+.tui-cmd-result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 14px;
+  background: transparent;
+  border: 0;
+  color: var(--tui-fg-2);
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--tui-font-sans);
+  font-size: 12.5px;
+}
+.tui-cmd-result:hover,
+.tui-cmd-result.is-active {
+  background: var(--tui-bg-3);
+  color: var(--tui-fg);
+}
+.tui-cmd-result-label {
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.tui-cmd-result-sub {
+  font-family: var(--tui-font-mono);
+  font-size: 11px;
+  color: var(--tui-fg-4);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tui-cmd-result-kind {
+  font-family: var(--tui-font-mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--tui-fg-4);
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--tui-bg-3);
+  flex-shrink: 0;
+}
+.tui-cmd-result.is-active .tui-cmd-result-kind {
+  background: var(--tui-bg-4);
+}
+.tui-cmd-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--tui-fg-4);
+  font-size: 12px;
+}
+.tui-cmd-foot {
+  display: flex;
+  gap: 16px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--tui-line);
+  background: var(--tui-bg-2);
+  color: var(--tui-fg-4);
+  font-size: 10.5px;
+}
+.tui-cmd-foot > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 /* ───── Scrollbar override inside dark surfaces ───── */

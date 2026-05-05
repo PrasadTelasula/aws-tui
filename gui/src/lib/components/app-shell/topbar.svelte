@@ -94,11 +94,10 @@
     return out;
   });
 
-  // Profiles to show in the picker: distinct profiles defined in the loaded
-  // aliases file, plus the current $profile so the user never gets stuck.
+  // Profile picker shows only active profiles. The current $profile is
+  // included even if it isn't active, so the user can see what's set.
   let profileOptions = $derived.by(() => {
-    const set = new Set<string>();
-    for (const a of $aliases) if (a.profile) set.add(a.profile);
+    const set = new Set<string>(activeProfiles);
     if ($profile) set.add($profile);
     return [...set].sort();
   });
@@ -195,10 +194,10 @@
     {#if profileMenuOpen}
       <div class="tui-context-menu" role="listbox">
         {#if profileOptions.length === 0}
-          <div class="tui-context-menu-empty">No profiles found in aliases file</div>
+          <div class="tui-context-menu-empty">No active sessions</div>
         {:else}
           <div class="tui-context-menu-section">
-            {activeProfiles.size} active · {profileOptions.length} total
+            {activeProfiles.size} active
           </div>
           {#each profileOptions as p (p)}
             {@const active = activeProfiles.has(p)}

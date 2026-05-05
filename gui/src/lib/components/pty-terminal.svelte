@@ -26,7 +26,7 @@
     const { WebLinksAddon } = await import('@xterm/addon-web-links');
 
     term = new Terminal({
-      fontFamily: '"Geist Mono Variable", ui-monospace, monospace',
+      fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
       fontSize: 12.5,
       lineHeight: 1.5,
       theme: {

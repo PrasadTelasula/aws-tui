@@ -13,6 +13,10 @@
 :root {
   --tui-font-sans: 'Geist Variable', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --tui-font-mono: 'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* Used for terminal/output surfaces only. Geist Mono is used for inline
+     UI mono (alias names, kbd, etc.) — but pasted shell output reads better
+     in IBM Plex Mono, so it gets its own stack. */
+  --tui-font-term: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   /* Dark theme is default — true black + zinc grays (shadcn-style) */
   --tui-bg:       #000000;          /* deepest — sidebar */
@@ -1363,8 +1367,8 @@ body {
   min-height: 0;
   overflow-y: auto;
   padding: 12px 16px;
-  font-family: var(--tui-font-mono);
-  font-size: 11.5px;
+  font-family: var(--tui-font-term);
+  font-size: 12px;
   line-height: 1.65;
 }
 .tui-output-line {
@@ -1381,8 +1385,8 @@ body {
 .tui-output-empty {
   font-style: italic;
   color: #6B7C95;
-  font-family: var(--tui-font-mono);
-  font-size: 11.5px;
+  font-family: var(--tui-font-term);
+  font-size: 12px;
 }
 
 /* ───── Instances ───── */
@@ -1728,7 +1732,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-family: var(--tui-font-mono);
+  font-family: var(--tui-font-term);
   font-size: 11px;
   color: var(--tui-fg-4);
 }
@@ -1738,7 +1742,7 @@ body {
   gap: 5px;
   font-size: 11px;
   color: var(--tui-ok);
-  font-family: var(--tui-font-mono);
+  font-family: var(--tui-font-term);
 }
 .tui-term-toolbar-status.is-off { color: var(--tui-fg-4); }
 
@@ -1759,7 +1763,7 @@ body {
   padding: 6px 12px;
   background: var(--tui-bg-2);
   border-top: 1px solid var(--tui-line);
-  font-family: var(--tui-font-mono);
+  font-family: var(--tui-font-term);
   font-size: 10.5px;
   color: var(--tui-fg-4);
   flex-shrink: 0;
@@ -1863,7 +1867,7 @@ body {
   padding: 7px 12px;
   background: var(--tui-bg-2);
   border-bottom: 1px solid var(--tui-line);
-  font-family: var(--tui-font-mono);
+  font-family: var(--tui-font-term);
   font-size: 11px;
   color: var(--tui-fg-2);
 }
@@ -1896,6 +1900,17 @@ body {
   flex: 1;
   min-height: 0;
   background: #000000;
+  font-family: var(--tui-font-term);
+  font-size: 12px;
+}
+
+/* Per-line text inside terminal/output viewers — explicit so it doesn't
+   inherit a sans font from a wrapper. */
+.tui-term-line,
+.tui-term-input,
+.tui-output-line {
+  font-family: var(--tui-font-term);
+  font-size: 12px;
 }
 
 /* ───── Scrollbar override inside dark surfaces ───── */

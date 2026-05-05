@@ -13,6 +13,10 @@
 /* ---- Font loading: all fonts are loaded here, nowhere else ---- */
 @import '@fontsource-variable/geist/wght.css';
 @import '@fontsource-variable/geist-mono/wght.css';
+/* Terminal-only mono — user prefers IBM Plex Mono for terminal text. */
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+@import '@fontsource/ibm-plex-mono/600.css';
 
 @import '@xterm/xterm/css/xterm.css';
 

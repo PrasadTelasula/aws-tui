@@ -1801,70 +1801,87 @@ body {
 }
 .tui-inst-detail.is-compact {
   flex: 0 0 auto;
-  max-height: 220px;
+  max-height: 130px;
   overflow-y: auto;
 }
 .tui-inst-detail.is-compact .tui-inst-hero {
-  padding: 10px 16px 8px;
-  gap: 12px;
+  padding: 8px 14px 4px;
+  gap: 10px;
+  border-bottom: 0;
+  flex-wrap: wrap;
+  align-items: center;
 }
 .tui-inst-detail.is-compact .tui-inst-hero-title {
-  font-size: 14px;
+  font-size: 13px;
+  font-family: var(--tui-font-mono);
   letter-spacing: -0.01em;
 }
 .tui-inst-detail.is-compact .tui-inst-hero-id {
-  margin-top: 1px;
+  margin-top: 0;
   font-size: 10.5px;
 }
 .tui-inst-detail.is-compact .tui-chip-row {
-  margin-top: 6px;
-  gap: 5px;
+  margin-top: 4px;
+  gap: 4px;
 }
 .tui-inst-detail.is-compact .tui-chip {
-  padding: 2px 7px;
-  font-size: 10.5px;
+  padding: 1px 6px;
+  font-size: 10px;
 }
 .tui-inst-detail.is-compact .tui-inst-hero-actions {
+  flex-direction: row;
+  align-items: center;
   gap: 6px;
 }
 .tui-inst-detail.is-compact .tui-pill-md {
-  font-size: 10.5px;
-  height: 22px;
-  padding: 0 9px;
+  font-size: 10px;
+  height: 20px;
+  padding: 0 8px;
 }
+/* Sections become inline strips — labels are hidden, cards collapse to
+   row pills so the whole info area fits inside ~130px. */
 .tui-inst-detail.is-compact .tui-inst-section {
-  padding: 8px 16px;
+  padding: 4px 14px;
+  border-bottom: 0;
 }
 .tui-inst-detail.is-compact .tui-section-label {
-  padding-bottom: 4px;
+  display: none;
 }
 .tui-inst-detail.is-compact .tui-card-grid {
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 4px;
   margin-top: 0;
 }
 .tui-inst-detail.is-compact .tui-info-card {
-  padding: 6px 10px;
-  gap: 2px;
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid var(--tui-line);
+  border-radius: 3px;
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
+  gap: 6px;
 }
 .tui-inst-detail.is-compact .tui-info-card-label {
   font-size: 9px;
+  letter-spacing: 0.08em;
 }
 .tui-inst-detail.is-compact .tui-info-card-value {
-  font-size: 11.5px;
+  font-size: 11px;
   text-align: right;
 }
 .tui-inst-detail.is-compact .tui-info-card-copy {
   display: none;
 }
 .tui-inst-detail.is-compact .tui-tags {
-  gap: 4px;
+  gap: 3px;
 }
 .tui-inst-detail.is-compact .tui-tag-pill {
-  font-size: 10px;
+  font-size: 9.5px;
+}
+.tui-inst-detail.is-compact .tui-tag-key,
+.tui-inst-detail.is-compact .tui-tag-val {
+  padding: 1px 5px;
 }
 .tui-pty-header {
   display: flex;

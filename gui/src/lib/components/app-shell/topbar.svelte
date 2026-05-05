@@ -3,24 +3,24 @@
   import { profile, region, aliasesPath, aliases } from '$lib/stores/aws';
   import { ipc } from '$lib/ipc';
   import {
-    Activity,
-    Server,
-    Boxes,
-    TerminalSquare,
-    ChevronRight,
-    Search,
+    Pulse,
+    HardDrives,
+    Stack,
+    TerminalWindow,
+    CaretRight,
+    MagnifyingGlass,
     FolderOpen,
     Bell,
-    Settings,
+    GearSix,
     Sun,
     Moon
-  } from 'lucide-svelte';
+  } from 'phosphor-svelte';
 
   const titles: Record<string, { icon: any; label: string }> = {
-    '/':           { icon: Activity,        label: 'Sessions' },
-    '/instances':  { icon: Server,          label: 'Instances' },
-    '/containers': { icon: Boxes,           label: 'Containers' },
-    '/terminal':   { icon: TerminalSquare,  label: 'Terminal' }
+    '/':           { icon: Pulse,          label: 'Sessions' },
+    '/instances':  { icon: HardDrives,     label: 'Instances' },
+    '/containers': { icon: Stack,          label: 'Containers' },
+    '/terminal':   { icon: TerminalWindow, label: 'Terminal' }
   };
 
   let current = $derived.by(() => {
@@ -84,16 +84,16 @@
   <!-- Breadcrumb -->
   <div class="tui-breadcrumb">
     <span class="tui-breadcrumb-org">aws-tui</span>
-    <span class="tui-breadcrumb-sep"><ChevronRight size={11} /></span>
+    <span class="tui-breadcrumb-sep"><CaretRight size={11} weight="bold" /></span>
     <span class="tui-breadcrumb-current">
-      <span class="tui-breadcrumb-current-icon"><CurrentIcon size={13} strokeWidth={1.8} /></span>
+      <span class="tui-breadcrumb-current-icon"><CurrentIcon size={13} weight="bold" /></span>
       {current.label}
     </span>
   </div>
 
   <!-- Command palette trigger (placeholder — opens search later) -->
   <button type="button" class="tui-cmd-trigger" style="margin-left: 12px;" onclick={() => { /* TODO: command palette */ }}>
-    <span class="tui-cmd-trigger-icon"><Search size={13} strokeWidth={1.8} /></span>
+    <span class="tui-cmd-trigger-icon"><MagnifyingGlass size={13} weight="bold" /></span>
     <span>Jump to alias, instance, command…</span>
     <kbd class="tui-kbd">⌘K</kbd>
   </button>
@@ -107,7 +107,7 @@
     title={$aliasesPath ?? 'No aliases file loaded'}
     onclick={pickFile}
   >
-    <span style="display: inline-flex; color: var(--tui-fg-3);"><FolderOpen size={12} /></span>
+    <span style="display: inline-flex; color: var(--tui-fg-3);"><FolderOpen size={12} weight="regular" /></span>
     <span class="tui-context-pill-value">{basename ?? 'Load aliases…'}</span>
   </button>
 
@@ -171,7 +171,7 @@
       title="Notifications"
       aria-label="Notifications"
     >
-      <Bell size={14} strokeWidth={1.7} />
+      <Bell size={14} weight="regular" />
     </button>
     <button
       type="button"
@@ -179,7 +179,7 @@
       title="Settings"
       aria-label="Settings"
     >
-      <Settings size={14} strokeWidth={1.7} />
+      <GearSix size={14} weight="regular" />
     </button>
     <button
       type="button"
@@ -189,9 +189,9 @@
       onclick={toggleTheme}
     >
       {#if dark}
-        <Sun size={14} strokeWidth={1.7} />
+        <Sun size={14} weight="regular" />
       {:else}
-        <Moon size={14} strokeWidth={1.7} />
+        <Moon size={14} weight="regular" />
       {/if}
     </button>
   </div>

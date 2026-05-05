@@ -7,16 +7,16 @@
   import PtyTerminal from '$lib/components/pty-terminal.svelte';
   import StatusDot from '$lib/components/status-dot.svelte';
   import {
-    ChevronRight,
-    RefreshCw,
-    Boxes,
-    Layers,
-    Loader2,
-    Box,
+    CaretRight as ChevronRight,
+    ArrowsClockwise as RefreshCw,
+    Stack as Boxes,
+    StackPlus as Layers,
+    CircleNotch as Loader2,
+    Cube as Box,
     Plug,
     Cpu,
     Database
-  } from 'lucide-svelte';
+  } from 'phosphor-svelte';
 
   type ServiceNode = Service & { tasks?: Task[]; expanded?: boolean; loading?: boolean };
   type ClusterNode = Cluster & { services?: ServiceNode[]; expanded?: boolean; loading?: boolean };
@@ -102,7 +102,7 @@
   <!-- Toolbar -->
   <div class="tui-toolbar">
     <div class="tui-toolbar-title">
-      <span class="tui-toolbar-title-icon"><Boxes size={15} strokeWidth={1.8} /></span>
+      <span class="tui-toolbar-title-icon"><Boxes size={15} weight="regular" /></span>
       ECS Clusters
     </div>
     <div class="tui-toolbar-stats">
@@ -123,7 +123,7 @@
       onclick={refresh}
       disabled={$loading.clusters}
     >
-      <RefreshCw size={12} strokeWidth={1.8} class={$loading.clusters ? 'tui-spinner' : ''} />
+      <RefreshCw size={12} weight="regular" class={$loading.clusters ? 'tui-spinner' : ''} />
       Refresh
     </button>
   </div>
@@ -134,7 +134,7 @@
       <div class="tui-split-list-header" style="padding-bottom: 8px;">
         <div class="tui-section-label" style="padding: 0;">
           <span class="tui-section-label-text">
-            <Layers size={11} strokeWidth={2} />
+            <Layers size={11} weight="bold" />
             Cluster Tree
           </span>
         </div>
@@ -148,7 +148,7 @@
           </div>
         {:else if tree.length === 0}
           <div class="tui-empty">
-            <div class="tui-empty-icon"><Boxes size={22} strokeWidth={1.5} /></div>
+            <div class="tui-empty-icon"><Boxes size={22} weight="thin" /></div>
             <div class="tui-empty-sub">No clusters found</div>
           </div>
         {/if}
@@ -160,9 +160,9 @@
             onclick={() => toggleCluster(c)}
           >
             <span class="tui-tree-chev" class:is-open={c.expanded}>
-              <ChevronRight size={11} strokeWidth={2} />
+              <ChevronRight size={11} weight="bold" />
             </span>
-            <span class="tui-tree-icon-cluster"><Layers size={13} strokeWidth={1.8} /></span>
+            <span class="tui-tree-icon-cluster"><Layers size={13} weight="regular" /></span>
             <span class="tui-tree-name tui-tree-cluster-name">{c.name}</span>
             <span class={`tui-tree-count ${c.runningTasks > 0 ? 'is-ok' : ''}`}>
               {c.runningTasks}
@@ -184,7 +184,7 @@
                 onclick={() => toggleService(c, s)}
               >
                 <span class="tui-tree-chev" class:is-open={s.expanded}>
-                  <ChevronRight size={10} strokeWidth={2} />
+                  <ChevronRight size={10} weight="bold" />
                 </span>
                 <span class="tui-tree-name">{s.name}</span>
                 <span class={`tui-tree-count is-${health}`}>{s.running}/{s.desired}</span>
@@ -248,7 +248,7 @@
           <div class="tui-inst-section">
             <div class="tui-section-label">
               <span class="tui-section-label-text">
-                <Box size={12} strokeWidth={2} />
+                <Box size={12} weight="bold" />
                 Containers
                 <span class="tui-section-count">{containers.length}</span>
               </span>
@@ -268,7 +268,7 @@
                   {@const running = co.lastStatus === 'RUNNING'}
                   <div class="tui-container-card" class:is-active={isExec}>
                     <div class="tui-container-card-icon" class:is-running={running}>
-                      <Box size={18} strokeWidth={1.6} />
+                      <Box size={18} weight="regular" />
                     </div>
                     <div class="tui-container-card-info">
                       <div class="tui-container-card-row">
@@ -291,7 +291,7 @@
                         class={`tui-btn tui-btn-${isExec ? 'outline' : 'default'} tui-btn-sm`}
                         onclick={() => execContainer(task, co)}
                       >
-                        <Plug size={12} strokeWidth={1.8} />
+                        <Plug size={12} weight="regular" />
                         {isExec ? 'Active' : 'Exec'}
                       </button>
                     {/if}
@@ -328,7 +328,7 @@
         {/if}
       {:else}
         <div class="tui-empty">
-          <div class="tui-empty-icon"><Boxes size={22} strokeWidth={1.5} /></div>
+          <div class="tui-empty-icon"><Boxes size={22} weight="thin" /></div>
           <div class="tui-empty-title">Select a task</div>
           <div class="tui-empty-sub">Expand a cluster → service → task in the tree on the left.</div>
         </div>

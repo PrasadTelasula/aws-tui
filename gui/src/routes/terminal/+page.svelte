@@ -4,7 +4,7 @@
   import { ipc } from '$lib/ipc';
   import { profile, region } from '$lib/stores/aws';
   import StatusDot from '$lib/components/status-dot.svelte';
-  import { TerminalSquare, Trash2, MapPin } from 'lucide-svelte';
+  import { TerminalWindow as TerminalSquare, Trash as Trash2, MapPin } from 'phosphor-svelte';
 
   let container: HTMLDivElement;
   let term: any = null;
@@ -106,7 +106,7 @@
       <!-- Toolbar -->
       <div class="tui-term-toolbar">
         <span style="display: inline-flex; color: var(--tui-fg-3);">
-          <TerminalSquare size={13} strokeWidth={1.7} />
+          <TerminalSquare size={13} weight="regular" />
         </span>
         <span style="font-weight: 600; color: var(--tui-fg-2); font-size: 12px;">Terminal</span>
         <span class="tui-term-toolbar-meta">
@@ -125,7 +125,7 @@
           class="tui-btn tui-btn-ghost tui-btn-sm"
           onclick={() => term?.clear()}
         >
-          <Trash2 size={11} strokeWidth={1.8} />
+          <Trash2 size={11} weight="regular" />
           Clear
         </button>
       </div>

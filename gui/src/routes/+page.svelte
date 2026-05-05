@@ -12,16 +12,16 @@
   import ConfirmModal from '$lib/components/confirm-modal.svelte';
   import StatusDot from '$lib/components/status-dot.svelte';
   import {
-    PowerOff,
-    RefreshCw,
-    Activity,
+    Power as PowerOff,
+    ArrowsClockwise as RefreshCw,
+    Pulse as Activity,
     Tag,
-    LogIn,
+    SignIn as LogIn,
     Shield,
-    Network,
-    Search as SearchIcon,
-    ChevronDown
-  } from 'lucide-svelte';
+    TreeStructure as Network,
+    MagnifyingGlass as SearchIcon,
+    CaretDown as ChevronDown
+  } from 'phosphor-svelte';
   import { uptimeFrom } from '$lib/utils';
   import { stateTone, portHint } from '$lib/sessions-helpers';
 
@@ -350,7 +350,7 @@
   <!-- Toolbar -->
   <div class="tui-toolbar">
     <div class="tui-toolbar-title">
-      <span class="tui-toolbar-title-icon"><Activity size={15} strokeWidth={1.8} /></span>
+      <span class="tui-toolbar-title-icon"><Activity size={15} weight="regular" /></span>
       Sessions
     </div>
     <div class="tui-toolbar-stats">
@@ -375,7 +375,7 @@
         class="tui-btn tui-btn-destructive tui-btn-sm"
         onclick={() => (confirmStopAll = true)}
       >
-        <PowerOff size={12} strokeWidth={1.8} />
+        <PowerOff size={12} weight="regular" />
         Stop all
       </button>
     {/if}
@@ -385,7 +385,7 @@
       onclick={refresh}
       disabled={$loading.aliases}
     >
-      <RefreshCw size={12} strokeWidth={1.8} class={$loading.aliases ? 'tui-spinner' : ''} />
+      <RefreshCw size={12} weight="regular" class={$loading.aliases ? 'tui-spinner' : ''} />
       Refresh
     </button>
   </div>
@@ -493,7 +493,7 @@
                 >
                   <span class="tui-alias-row-kind">
                     <span class={`tui-kind tui-kind-${km.tone} tui-kind-compact`} title={km.label}>
-                      <KindIcon size={11} strokeWidth={2} />
+                      <KindIcon size={11} weight="bold" />
                     </span>
                   </span>
                   <span class="tui-alias-row-body">

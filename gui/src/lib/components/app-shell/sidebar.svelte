@@ -4,20 +4,19 @@
   import { profile, region, sessions } from '$lib/stores/aws';
   import { isActive } from '$lib/sessions-helpers';
   import {
-    Activity,
-    Server,
-    Boxes,
-    TerminalSquare,
-    PanelLeftClose,
-    PanelLeftOpen
-  } from 'lucide-svelte';
+    Pulse,
+    HardDrives,
+    Stack,
+    TerminalWindow,
+    SidebarSimple
+  } from 'phosphor-svelte';
   import StatusDot from '$lib/components/status-dot.svelte';
 
   const navItems = [
-    { href: '/',           label: 'Sessions',   icon: Activity,        shortcut: 'g s' },
-    { href: '/instances',  label: 'Instances',  icon: Server,          shortcut: 'g i' },
-    { href: '/containers', label: 'Containers', icon: Boxes,           shortcut: 'g c' },
-    { href: '/terminal',   label: 'Terminal',   icon: TerminalSquare,  shortcut: 'g t' }
+    { href: '/',           label: 'Sessions',   icon: Pulse,          shortcut: 'g s' },
+    { href: '/instances',  label: 'Instances',  icon: HardDrives,     shortcut: 'g i' },
+    { href: '/containers', label: 'Containers', icon: Stack,          shortcut: 'g c' },
+    { href: '/terminal',   label: 'Terminal',   icon: TerminalWindow, shortcut: 'g t' }
   ];
 
   function isCurrent(href: string): boolean {
@@ -87,7 +86,7 @@
         class:is-active={active}
         title={$sidebarOpen ? undefined : item.label}
       >
-        <span class="tui-nav-item-icon"><Icon size={15} strokeWidth={1.7} /></span>
+        <span class="tui-nav-item-icon"><Icon size={15} weight={active ? 'bold' : 'regular'} /></span>
         <span class="tui-nav-item-label">{item.label}</span>
         {#if showCount}
           <span class="tui-nav-item-badge">{runningCount}</span>
@@ -130,11 +129,8 @@
       title={$sidebarOpen ? 'Collapse sidebar (⌘B)' : 'Expand sidebar (⌘B)'}
       aria-label="Toggle sidebar"
     >
-      {#if $sidebarOpen}
-        <PanelLeftClose size={14} strokeWidth={1.7} />
-      {:else}
-        <PanelLeftOpen size={14} strokeWidth={1.7} />
-      {/if}
+      <SidebarSimple size={14} weight="regular" />
+
     </button>
   </div>
 </aside>

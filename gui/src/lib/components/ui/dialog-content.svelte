@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import { cn } from '$lib/utils';
-  import { X } from 'lucide-svelte';
+  import { X } from 'phosphor-svelte';
 
   interface Props {
     class?: string;

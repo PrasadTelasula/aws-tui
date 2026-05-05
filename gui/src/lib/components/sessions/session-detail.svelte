@@ -1,15 +1,15 @@
 <script lang="ts">
   import {
     Copy,
-    KeyRound,
+    Key as KeyRound,
     Play,
-    Square,
-    Terminal as TermIcon,
-    AlertCircle,
-    LogIn,
+    Stop as Square,
+    TerminalWindow as TermIcon,
+    WarningCircle as AlertCircle,
+    SignIn as LogIn,
     Shield,
-    Network
-  } from 'lucide-svelte';
+    TreeStructure as Network
+  } from 'phosphor-svelte';
   import StatusDot from '$lib/components/status-dot.svelte';
   import {
     isActive,
@@ -94,7 +94,7 @@
 {#if !alias}
   <div class="tui-empty">
     <div class="tui-empty-icon">
-      <TermIcon size={22} strokeWidth={1.5} />
+      <TermIcon size={22} weight="thin" />
     </div>
     <div class="tui-empty-title">Select an alias</div>
     <div class="tui-empty-sub">Choose a session from the list to view details, output, and connection info.</div>
@@ -105,7 +105,7 @@
   <div class="tui-detail-header">
     <div class="tui-detail-eyebrow">
       <span class={`tui-kind tui-kind-${km.tone}`}>
-        <KindIcon size={10} strokeWidth={2} />
+        <KindIcon size={10} weight="bold" />
         {km.label}
       </span>
       {#if alias.group || alias.subgroup}
@@ -130,7 +130,7 @@
             class="tui-btn tui-btn-outline tui-btn-sm"
             onclick={() => onShowCredentials(alias.name)}
           >
-            <KeyRound size={12} strokeWidth={1.8} />
+            <KeyRound size={12} weight="regular" />
             Credentials
           </button>
         {/if}
@@ -140,7 +140,7 @@
           title="Copy command"
           onclick={() => onCopyCommand(alias.command)}
         >
-          <Copy size={12} strokeWidth={1.8} />
+          <Copy size={12} weight="regular" />
         </button>
         {#if active}
           <button
@@ -148,7 +148,7 @@
             class="tui-btn tui-btn-destructive tui-btn-sm"
             onclick={() => onStop(alias)}
           >
-            <Square size={12} strokeWidth={1.8} />
+            <Square size={12} weight="regular" />
             Stop
           </button>
         {:else}
@@ -157,7 +157,7 @@
             class="tui-btn tui-btn-default tui-btn-sm"
             onclick={() => onStart(alias)}
           >
-            <Play size={12} strokeWidth={1.8} />
+            <Play size={12} weight="regular" />
             {status?.state === 'expired' ? 'Re-login' : 'Start'}
           </button>
         {/if}
@@ -166,7 +166,7 @@
     {#if status?.errorMessage}
       <div class="tui-detail-error">
         <span style="display: inline-flex; flex-shrink: 0; margin-top: 1px;">
-          <AlertCircle size={14} strokeWidth={1.8} />
+          <AlertCircle size={14} weight="regular" />
         </span>
         <span>{status.errorMessage}</span>
       </div>
@@ -235,7 +235,7 @@
   <div class="tui-command-block">
     <div class="tui-command-block-head">
       <span class="tui-command-block-label">
-        <TermIcon size={11} strokeWidth={2} />
+        <TermIcon size={11} weight="bold" />
         Command
       </span>
       <button
@@ -244,7 +244,7 @@
         onclick={() => onCopyCommand(alias.command)}
         title="Copy command"
       >
-        <Copy size={11} strokeWidth={1.8} />
+        <Copy size={11} weight="regular" />
         Copy
       </button>
     </div>

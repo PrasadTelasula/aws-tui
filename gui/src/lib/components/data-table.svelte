@@ -15,7 +15,7 @@
 
 <script lang="ts" generics="TData">
   import { cn } from '$lib/utils';
-  import { ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-svelte';
+  import { ArrowUp, ArrowDown, ArrowsDownUp as ArrowUpDown } from 'phosphor-svelte';
 
   interface Props {
     data: TData[];

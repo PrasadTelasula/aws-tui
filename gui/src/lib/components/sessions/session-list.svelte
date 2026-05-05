@@ -45,7 +45,7 @@
 </script>
 
 <script lang="ts">
-  import { ChevronDown, Search, LogIn, Shield, Network, Tag } from 'lucide-svelte';
+  import { CaretDown, MagnifyingGlass, SignIn, Shield, TreeStructure, Tag } from 'phosphor-svelte';
   import StatusDot from '$lib/components/status-dot.svelte';
   import {
     isActive,
@@ -114,9 +114,9 @@
   // Map alias kind → kind tag color + icon (used in row leading slot)
   function kindMeta(kind: Alias['kind']): { tone: string; Icon: any; label: string } {
     switch (kind) {
-      case 'sso-login':   return { tone: 'violet', Icon: LogIn,    label: 'SSO' };
-      case 'iam-profile': return { tone: 'cyan',   Icon: Shield,   label: 'IAM' };
-      case 'ssm-session': return { tone: 'amber',  Icon: Network,  label: 'SSM' };
+      case 'sso-login':   return { tone: 'violet', Icon: SignIn,         label: 'SSO' };
+      case 'iam-profile': return { tone: 'cyan',   Icon: Shield,         label: 'IAM' };
+      case 'ssm-session': return { tone: 'amber',  Icon: TreeStructure,  label: 'SSM' };
       default:            return { tone: 'muted',  Icon: Tag,      label: 'OTH' };
     }
   }
@@ -153,7 +153,7 @@
 <div class="tui-split-list">
   <div class="tui-split-list-header">
     <div class="tui-search">
-      <span class="tui-search-icon"><Search size={13} strokeWidth={1.8} /></span>
+      <span class="tui-search-icon"><Search size={13} weight="regular" /></span>
       <input
         bind:this={searchInput}
         bind:value={filter}
@@ -182,7 +182,7 @@
           class:is-collapsed={isCollapsed}
           onclick={() => onToggleGroup(row.group.name)}
         >
-          <span class="tui-group-header-chev"><ChevronDown size={11} strokeWidth={2} /></span>
+          <span class="tui-group-header-chev"><ChevronDown size={11} weight="bold" /></span>
           <span>{row.group.name}</span>
           <span class="tui-group-header-line"></span>
           <span class="tui-group-header-count">{total}</span>
@@ -212,7 +212,7 @@
         >
           <span class="tui-alias-row-kind">
             <span class={`tui-kind tui-kind-${km.tone} tui-kind-compact`} title={km.label}>
-              <KindIcon size={11} strokeWidth={2} />
+              <KindIcon size={11} weight="bold" />
             </span>
           </span>
           <span class="tui-alias-row-body">

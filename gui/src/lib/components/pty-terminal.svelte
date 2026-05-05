@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { ipc } from '$lib/ipc';
-  import { X, PlugZap } from 'lucide-svelte';
+  import { X, PlugCharging } from 'phosphor-svelte';
 
   interface Props {
     ptyId: string;
@@ -104,7 +104,7 @@
   <div class="tui-pty-header">
     <span class="tui-pty-header-dots"><span></span><span></span><span></span></span>
     <span class="tui-pty-header-title">
-      <PlugZap size={13} strokeWidth={1.7} />
+      <PlugCharging size={13} weight="regular" />
 
       <span style="min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{title}</span>
     </span>
@@ -128,7 +128,7 @@
         class="tui-iconbtn tui-iconbtn-sm"
         aria-label="Close terminal"
       >
-        <X size={13} strokeWidth={1.7} />
+        <X size={13} weight="bold" />
       </button>
     {/if}
   </div>

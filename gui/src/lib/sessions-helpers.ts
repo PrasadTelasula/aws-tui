@@ -1,14 +1,14 @@
 import type { Component } from 'svelte';
 import {
-  Boxes,
+  Stack,
   Database,
-  KeyRound,
-  Network,
-  Server,
+  Key,
+  TreeStructure,
+  HardDrives,
   Shield,
-  TerminalSquare,
+  TerminalWindow,
   Tag
-} from 'lucide-svelte';
+} from 'phosphor-svelte';
 import type { Alias, SessionState, SessionStatus } from './types';
 
 export type StatusTone = 'ok' | 'warn' | 'error' | 'info' | 'muted';
@@ -54,8 +54,8 @@ export function kindLabel(k: Alias['kind']): string {
 export function kindIcon(k: Alias['kind']): Component {
   switch (k) {
     case 'sso-login': return Shield;
-    case 'ssm-session': return Network;
-    case 'iam-profile': return KeyRound;
+    case 'ssm-session': return TreeStructure;
+    case 'iam-profile': return Key;
     default: return Tag;
   }
 }
@@ -64,11 +64,11 @@ export function subgroupIcon(name: string): Component {
   const s = name.toLowerCase();
   if (/sso|login|auth/.test(s)) return Shield;
   if (/db|database|rds|postgres|mysql/.test(s)) return Database;
-  if (/os|opensearch|elastic/.test(s)) return Boxes;
-  if (/shell|term|host|ec2|instance/.test(s)) return TerminalSquare;
-  if (/vpn|tunnel|net/.test(s)) return Network;
-  if (/iam|key|cred/.test(s)) return KeyRound;
-  if (/ecs|container|task|cluster|service/.test(s)) return Server;
+  if (/os|opensearch|elastic/.test(s)) return Stack;
+  if (/shell|term|host|ec2|instance/.test(s)) return TerminalWindow;
+  if (/vpn|tunnel|net/.test(s)) return TreeStructure;
+  if (/iam|key|cred/.test(s)) return Key;
+  if (/ecs|container|task|cluster|service/.test(s)) return HardDrives;
   return Tag;
 }
 

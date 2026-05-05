@@ -7,18 +7,18 @@
   import PtyTerminal from '$lib/components/pty-terminal.svelte';
   import StatusDot from '$lib/components/status-dot.svelte';
   import {
-    RefreshCw,
-    Search,
-    Server,
+    ArrowsClockwise as RefreshCw,
+    MagnifyingGlass as Search,
+    HardDrives as Server,
     Copy,
     MapPin,
     Cpu,
-    Network as NetIcon,
+    TreeStructure as NetIcon,
     Globe,
     Tag,
-    Loader2,
+    CircleNotch as Loader2,
     Plug
-  } from 'lucide-svelte';
+  } from 'phosphor-svelte';
 
   let filter = $state('');
   let selected = $state<Instance | null>(null);
@@ -80,7 +80,7 @@
   <!-- Toolbar -->
   <div class="tui-toolbar">
     <div class="tui-toolbar-title">
-      <span class="tui-toolbar-title-icon"><Server size={15} strokeWidth={1.8} /></span>
+      <span class="tui-toolbar-title-icon"><Server size={15} weight="regular" /></span>
       EC2 Instances
     </div>
     <div class="tui-toolbar-stats">
@@ -99,7 +99,7 @@
       onclick={refresh}
       disabled={$loading.instances}
     >
-      <RefreshCw size={12} strokeWidth={1.8} class={$loading.instances ? 'tui-spinner' : ''} />
+      <RefreshCw size={12} weight="regular" class={$loading.instances ? 'tui-spinner' : ''} />
       Refresh
     </button>
   </div>
@@ -109,7 +109,7 @@
     <div class="tui-split-list">
       <div class="tui-split-list-header">
         <div class="tui-search">
-          <span class="tui-search-icon"><Search size={13} strokeWidth={1.8} /></span>
+          <span class="tui-search-icon"><Search size={13} weight="regular" /></span>
           <input
             class="tui-search-input"
             placeholder="Search instances…"
@@ -135,7 +135,7 @@
           </div>
         {:else if filtered.length === 0}
           <div class="tui-empty">
-            <div class="tui-empty-icon"><Server size={22} strokeWidth={1.5} /></div>
+            <div class="tui-empty-icon"><Server size={22} weight="thin" /></div>
             <div class="tui-empty-title">{filter ? 'No instances match' : 'No instances found'}</div>
           </div>
         {:else}
@@ -206,7 +206,7 @@
                   class="tui-btn tui-btn-default tui-btn-md"
                   onclick={() => connectSsm(inst)}
                 >
-                  <Plug size={14} strokeWidth={1.8} />
+                  <Plug size={14} weight="regular" />
                   Connect via SSM
                 </button>
               {/if}
@@ -217,7 +217,7 @@
             <div class="tui-inst-section">
               <div class="tui-section-label">
                 <span class="tui-section-label-text">
-                  <NetIcon size={12} strokeWidth={2} />
+                  <NetIcon size={12} weight="bold" />
                   Network
                 </span>
               </div>
@@ -229,7 +229,7 @@
                     onclick={() => copyIp(inst.privateIp!)}
                   >
                     <span class="tui-info-card-label">
-                      <NetIcon size={11} strokeWidth={2} />
+                      <NetIcon size={11} weight="bold" />
                       Private IP
                     </span>
                     <span class="tui-info-card-value">
@@ -245,7 +245,7 @@
                     onclick={() => copyIp(inst.publicIp!)}
                   >
                     <span class="tui-info-card-label">
-                      <Globe size={11} strokeWidth={2} />
+                      <Globe size={11} weight="bold" />
                       Public IP
                     </span>
                     <span class="tui-info-card-value">
@@ -256,7 +256,7 @@
                 {:else}
                   <div class="tui-info-card" style="cursor: default;">
                     <span class="tui-info-card-label">
-                      <Globe size={11} strokeWidth={2} />
+                      <Globe size={11} weight="bold" />
                       Public IP
                     </span>
                     <span class="tui-info-card-value is-muted">none</span>
@@ -270,7 +270,7 @@
             <div class="tui-inst-section">
               <div class="tui-section-label">
                 <span class="tui-section-label-text">
-                  <Tag size={12} strokeWidth={2} />
+                  <Tag size={12} weight="bold" />
                   Tags
                   <span class="tui-section-count">{Object.keys(inst.tags).length}</span>
                 </span>
@@ -303,7 +303,7 @@
         {/if}
       {:else}
         <div class="tui-empty">
-          <div class="tui-empty-icon"><Server size={22} strokeWidth={1.5} /></div>
+          <div class="tui-empty-icon"><Server size={22} weight="thin" /></div>
           <div class="tui-empty-title">Select an instance</div>
           <div class="tui-empty-sub">Choose from the list to view details and connect.</div>
         </div>

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Button, Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '$lib/components/ui';
-  import { AlertTriangle } from 'lucide-svelte';
+  import { Warning as AlertTriangle } from 'phosphor-svelte';
 
   interface Props {
     title: string;

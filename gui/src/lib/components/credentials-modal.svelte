@@ -3,7 +3,7 @@
   import { ipc } from '$lib/ipc';
   import type { CredentialInfo, SessionStatus } from '$lib/types';
   import { Badge, Button, Dialog, DialogContent, DialogHeader, DialogTitle } from '$lib/components/ui';
-  import { Check, Copy, Eye, EyeOff, KeyRound } from 'lucide-svelte';
+  import { Check, Copy, Eye, EyeSlash as EyeOff, Key as KeyRound } from 'phosphor-svelte';
 
   interface Props {
     alias: string;

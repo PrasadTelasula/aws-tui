@@ -2,6 +2,7 @@
   import { page } from '$app/stores';
   import { profile, region, aliasesPath, aliases } from '$lib/stores/aws';
   import { ipc } from '$lib/ipc';
+  import { onMount } from 'svelte';
   import {
     Pulse,
     HardDrives,
@@ -13,7 +14,8 @@
     Bell,
     GearSix,
     Sun,
-    Moon
+    Moon,
+    TextAa
   } from 'phosphor-svelte';
 
   const titles: Record<string, { icon: any; label: string }> = {
@@ -41,6 +43,36 @@
       root.classList.remove('dark');
     }
   }
+
+  // ─── Text size: cycles sm → md → lg → xl, persisted to localStorage ───
+  type TextSize = 'sm' | 'md' | 'lg' | 'xl';
+  const TEXT_SIZES: TextSize[] = ['sm', 'md', 'lg', 'xl'];
+  const TEXT_SIZE_LABEL: Record<TextSize, string> = {
+    sm: 'Small',
+    md: 'Default',
+    lg: 'Large',
+    xl: 'Extra-large'
+  };
+  let textSize = $state<TextSize>('md');
+
+  function applyTextSize(s: TextSize) {
+    document.documentElement.setAttribute('data-text-size', s);
+  }
+  function cycleTextSize() {
+    const next = TEXT_SIZES[(TEXT_SIZES.indexOf(textSize) + 1) % TEXT_SIZES.length];
+    textSize = next;
+    applyTextSize(next);
+    try { localStorage.setItem('aws-tui:text-size', next); } catch { /* ignore */ }
+  }
+  onMount(() => {
+    try {
+      const saved = localStorage.getItem('aws-tui:text-size') as TextSize | null;
+      if (saved && TEXT_SIZES.includes(saved)) {
+        textSize = saved;
+      }
+    } catch { /* ignore */ }
+    applyTextSize(textSize);
+  });
 
   // Inline-edit profile / region
   let editingProfile = $state(false);
@@ -172,6 +204,15 @@
       aria-label="Notifications"
     >
       <Bell size={14} weight="regular" />
+    </button>
+    <button
+      type="button"
+      class="tui-iconbtn tui-iconbtn-md"
+      title={`Text size: ${TEXT_SIZE_LABEL[textSize]} (click to cycle)`}
+      aria-label="Cycle text size"
+      onclick={cycleTextSize}
+    >
+      <TextAa size={14} weight="regular" />
     </button>
     <button
       type="button"

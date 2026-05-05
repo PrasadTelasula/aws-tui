@@ -93,6 +93,15 @@
 }
 
 html, body, #root { height: 100%; margin: 0; }
+
+/* User-controlled text size — applied via data-text-size on <html>.
+   Uses CSS zoom so every absolute px (fonts, padding, icon size) scales
+   proportionally; the viewport coordinate system rescales with it so
+   the layout still fills the window without overflow. */
+:root[data-text-size="sm"] { zoom: 0.92; }
+:root[data-text-size="md"] { zoom: 1; }
+:root[data-text-size="lg"] { zoom: 1.10; }
+:root[data-text-size="xl"] { zoom: 1.22; }
 body {
   background: var(--tui-bg-1);
   color: var(--tui-fg);

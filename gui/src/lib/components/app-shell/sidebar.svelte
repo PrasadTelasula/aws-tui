@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page } from '$app/stores';
   import { sidebarOpen } from '$lib/stores/ui';
-  import { profile, region, sessions } from '$lib/stores/aws';
+  import { sessions } from '$lib/stores/aws';
   import { isActive } from '$lib/sessions-helpers';
   import {
     Pulse,
@@ -94,25 +94,6 @@
       </a>
     {/each}
   </nav>
-
-  <!-- Context card -->
-  <div class="tui-sidebar-section">
-    <div class="tui-sidebar-section-label">Context</div>
-  </div>
-  <div class="tui-context-card">
-    <div class="tui-context-card-row">
-      <span class="tui-context-card-label">Profile</span>
-      <span class="tui-context-card-value" title={$profile}>{$profile}</span>
-    </div>
-    <div class="tui-context-card-row">
-      <span class="tui-context-card-label">Region</span>
-      <span class="tui-context-card-value" title={$region}>{$region}</span>
-    </div>
-    <div class="tui-context-card-status">
-      <StatusDot tone="ok" pulse />
-      <span style="color: var(--tui-ok);">connected</span>
-    </div>
-  </div>
 
   <!-- Footer / collapse toggle -->
   <div class="tui-sidebar-footer">

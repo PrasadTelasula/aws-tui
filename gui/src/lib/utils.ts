@@ -42,3 +42,16 @@ export function uptimeFrom(iso: string | null): string {
   const secs = Math.max(0, (Date.now() - t) / 1000);
   return formatDuration(secs);
 }
+
+/** Svelte action: invoke `handler` when the user clicks outside `node`. */
+export function clickOutside(node: HTMLElement, handler: () => void) {
+  const onMouseDown = (e: MouseEvent) => {
+    if (!node.contains(e.target as Node)) handler();
+  };
+  document.addEventListener('mousedown', onMouseDown);
+  return {
+    destroy() {
+      document.removeEventListener('mousedown', onMouseDown);
+    }
+  };
+}

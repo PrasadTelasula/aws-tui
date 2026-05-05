@@ -1,14 +1,19 @@
 <script lang="ts">
   import { page } from '$app/stores';
-  import { profile, region, aliasesPath, aliases } from '$lib/stores/aws';
+  import { profile, region, aliasesPath, aliases, sessions } from '$lib/stores/aws';
+  import { isActive } from '$lib/sessions-helpers';
   import { ipc } from '$lib/ipc';
   import { onMount } from 'svelte';
+  import { clickOutside } from '$lib/utils';
+  import StatusDot from '$lib/components/status-dot.svelte';
   import {
     Pulse,
     HardDrives,
     Stack,
     TerminalWindow,
     CaretRight,
+    CaretDown,
+    Check,
     MagnifyingGlass,
     FolderOpen,
     Bell,
@@ -74,21 +79,52 @@
     applyTextSize(textSize);
   });
 
-  // Inline-edit profile / region
-  let editingProfile = $state(false);
-  let editingRegion = $state(false);
-  let profileEl = $state<HTMLInputElement | null>(null);
-  let regionEl = $state<HTMLInputElement | null>(null);
+  // ─── Profile / Region dropdowns ─────────────────────────────────────
+  let profileMenuOpen = $state(false);
+  let regionMenuOpen = $state(false);
 
-  $effect(() => {
-    if (editingProfile && profileEl) { profileEl.focus(); profileEl.select(); }
-  });
-  $effect(() => {
-    if (editingRegion && regionEl) { regionEl.focus(); regionEl.select(); }
+  // A profile is "active" if any alias bound to it has a live session.
+  let activeProfiles = $derived.by(() => {
+    const out = new Set<string>();
+    for (const a of $aliases) {
+      if (!a.profile) continue;
+      const st = $sessions[a.name];
+      if (st && isActive(st)) out.add(a.profile);
+    }
+    return out;
   });
 
-  function commitEdit(e: KeyboardEvent, close: () => void) {
-    if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); close(); }
+  // Profiles to show in the picker: distinct profiles defined in the loaded
+  // aliases file, plus the current $profile so the user never gets stuck.
+  let profileOptions = $derived.by(() => {
+    const set = new Set<string>();
+    for (const a of $aliases) if (a.profile) set.add(a.profile);
+    if ($profile) set.add($profile);
+    return [...set].sort();
+  });
+
+  // A reasonable set of AWS commercial regions, plus any seen in aliases.
+  const COMMON_REGIONS = [
+    'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
+    'ca-central-1', 'sa-east-1',
+    'eu-west-1', 'eu-west-2', 'eu-west-3', 'eu-central-1', 'eu-north-1',
+    'ap-northeast-1', 'ap-northeast-2', 'ap-southeast-1', 'ap-southeast-2',
+    'ap-south-1'
+  ];
+  let regionOptions = $derived.by(() => {
+    const set = new Set<string>(COMMON_REGIONS);
+    for (const a of $aliases) if (a.region) set.add(a.region);
+    if ($region) set.add($region);
+    return [...set].sort();
+  });
+
+  function selectProfile(p: string) {
+    profile.set(p);
+    profileMenuOpen = false;
+  }
+  function selectRegion(r: string) {
+    region.set(r);
+    regionMenuOpen = false;
   }
 
   async function pickFile() {
@@ -143,56 +179,80 @@
     <span class="tui-context-pill-value">{basename ?? 'Load aliases…'}</span>
   </button>
 
-  <!-- Profile -->
-  {#if editingProfile}
-    <label class="tui-context-pill is-editing">
-      <span class="tui-context-pill-label">profile</span>
-      <input
-        bind:this={profileEl}
-        bind:value={$profile}
-        onblur={() => (editingProfile = false)}
-        onkeydown={(e) => commitEdit(e, () => (editingProfile = false))}
-        class="tui-context-pill-input"
-        spellcheck={false}
-      />
-    </label>
-  {:else}
+  <!-- Profile dropdown -->
+  <div class="tui-context-pill-wrap" use:clickOutside={() => (profileMenuOpen = false)}>
     <button
       type="button"
       class="tui-context-pill"
-      onclick={() => (editingProfile = true)}
-      title="Click to edit profile"
+      class:is-editing={profileMenuOpen}
+      onclick={() => (profileMenuOpen = !profileMenuOpen)}
+      title="Switch profile"
     >
       <span class="tui-context-pill-label">profile</span>
       <span class="tui-context-pill-value">{$profile}</span>
+      <span class="tui-context-pill-caret"><CaretDown size={10} weight="bold" /></span>
     </button>
-  {/if}
+    {#if profileMenuOpen}
+      <div class="tui-context-menu" role="listbox">
+        {#if profileOptions.length === 0}
+          <div class="tui-context-menu-empty">No profiles found in aliases file</div>
+        {:else}
+          <div class="tui-context-menu-section">
+            {activeProfiles.size} active · {profileOptions.length} total
+          </div>
+          {#each profileOptions as p (p)}
+            {@const active = activeProfiles.has(p)}
+            {@const selected = $profile === p}
+            <button
+              type="button"
+              class="tui-context-menu-item"
+              class:is-active={selected}
+              onclick={() => selectProfile(p)}
+            >
+              <StatusDot tone={active ? 'ok' : 'muted'} pulse={active} size={6} />
+              <span class="tui-context-menu-item-name">{p}</span>
+              {#if selected}
+                <span class="tui-context-menu-item-check"><Check size={11} weight="bold" /></span>
+              {/if}
+            </button>
+          {/each}
+        {/if}
+      </div>
+    {/if}
+  </div>
 
-  <!-- Region -->
-  {#if editingRegion}
-    <label class="tui-context-pill is-editing">
-      <span class="tui-context-pill-label">region</span>
-      <input
-        bind:this={regionEl}
-        bind:value={$region}
-        onblur={() => (editingRegion = false)}
-        onkeydown={(e) => commitEdit(e, () => (editingRegion = false))}
-        class="tui-context-pill-input"
-        style="width: 9ch;"
-        spellcheck={false}
-      />
-    </label>
-  {:else}
+  <!-- Region dropdown -->
+  <div class="tui-context-pill-wrap" use:clickOutside={() => (regionMenuOpen = false)}>
     <button
       type="button"
       class="tui-context-pill"
-      onclick={() => (editingRegion = true)}
-      title="Click to edit region"
+      class:is-editing={regionMenuOpen}
+      onclick={() => (regionMenuOpen = !regionMenuOpen)}
+      title="Switch region"
     >
       <span class="tui-context-pill-label">region</span>
       <span class="tui-context-pill-value">{$region}</span>
+      <span class="tui-context-pill-caret"><CaretDown size={10} weight="bold" /></span>
     </button>
-  {/if}
+    {#if regionMenuOpen}
+      <div class="tui-context-menu" role="listbox">
+        {#each regionOptions as r (r)}
+          {@const selected = $region === r}
+          <button
+            type="button"
+            class="tui-context-menu-item"
+            class:is-active={selected}
+            onclick={() => selectRegion(r)}
+          >
+            <span class="tui-context-menu-item-name">{r}</span>
+            {#if selected}
+              <span class="tui-context-menu-item-check"><Check size={11} weight="bold" /></span>
+            {/if}
+          </button>
+        {/each}
+      </div>
+    {/if}
+  </div>
 
   <div class="tui-topbar-divider"></div>
 

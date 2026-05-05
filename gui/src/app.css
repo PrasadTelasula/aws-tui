@@ -21,13 +21,13 @@
 
 @import '@xterm/xterm/css/xterm.css';
 
+/* AWS-TUI redesign tokens & component classes — must be imported here
+   (postcss-import only processes @import at the top of the file). */
+@import './tui.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-/* AWS-TUI redesign tokens & component classes (post-Tailwind so they win
-   when components mix the two). */
-@import './tui.css';
 
 @layer base {
   :root {

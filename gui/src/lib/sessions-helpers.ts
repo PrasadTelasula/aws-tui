@@ -85,8 +85,8 @@ export function portHint(a: Alias): string | null {
 }
 
 export function outputLineClass(line: string): string {
-  if (line.startsWith('>>>')) return 'text-status-info';
-  if (line.startsWith('[stderr]')) return 'text-status-warn';
+  if (line.startsWith('>>>')) return 'tui-output-line-info';
+  if (line.startsWith('[stderr]')) return 'tui-output-line-warn';
   const lower = line.toLowerCase();
   if (
     lower.includes('error') ||
@@ -94,9 +94,20 @@ export function outputLineClass(line: string): string {
     lower.includes('expired') ||
     lower.includes('denied')
   ) {
-    return 'text-status-error';
+    return 'tui-output-line-error';
   }
-  return 'text-[#d4d4d4]';
+  if (lower.includes('warn') || lower.includes('slow')) return 'tui-output-line-warn';
+  if (
+    lower.startsWith('starting') ||
+    lower.includes('opened') ||
+    lower.includes('waiting')
+  ) {
+    return 'tui-output-line-info';
+  }
+  if (lower.includes('connection accepted') || lower.includes('established')) {
+    return 'tui-output-line-success';
+  }
+  return 'tui-output-line-log';
 }
 
 // ─── Grouping ─────────────────────────────────────────────────────────

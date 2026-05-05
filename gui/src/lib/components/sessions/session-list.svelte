@@ -45,19 +45,15 @@
 </script>
 
 <script lang="ts">
-  import { tick } from 'svelte';
-  import { ChevronDown, ChevronRight, Search } from 'lucide-svelte';
-  import { Input } from '$lib/components/ui';
+  import { ChevronDown, Search, LogIn, Shield, Network, Tag } from 'lucide-svelte';
   import StatusDot from '$lib/components/status-dot.svelte';
   import {
     isActive,
     portHint,
-    stateTone,
-    subgroupIcon
+    stateTone
   } from '$lib/sessions-helpers';
   import type { SessionStatus } from '$lib/types';
-  import type { AliasGroup } from '$lib/sessions-helpers';
-  import { cn } from '$lib/utils';
+  import { uptimeFrom } from '$lib/utils';
 
   interface Props {
     groups: AliasGroup[];
@@ -69,6 +65,7 @@
     collapsed: Record<string, boolean>;
     searchInput?: HTMLInputElement;
     totalCount: number;
+    nowTick: number;
   }
 
   let {
@@ -80,7 +77,8 @@
     onToggleGroup,
     collapsed,
     searchInput = $bindable(),
-    totalCount
+    totalCount,
+    nowTick
   }: Props = $props();
 
   let listEl: HTMLDivElement | null = $state(null);
@@ -88,6 +86,9 @@
   let rows = $derived(flatten(groups, collapsed));
   let aliasRows = $derived(rows.filter((r) => r.type === 'alias'));
   let visibleAliasCount = $derived(aliasRows.length);
+  let runningCount = $derived(
+    Object.values(sessions).filter((s) => isActive(s)).length
+  );
 
   // Auto-select first alias when nothing selected
   $effect(() => {
@@ -109,107 +110,129 @@
   function cssEscape(s: string): string {
     return s.replace(/(["\\])/g, '\\$1');
   }
+
+  // Map alias kind → kind tag color + icon (used in row leading slot)
+  function kindMeta(kind: Alias['kind']): { tone: string; Icon: any; label: string } {
+    switch (kind) {
+      case 'sso-login':   return { tone: 'violet', Icon: LogIn,    label: 'SSO' };
+      case 'iam-profile': return { tone: 'cyan',   Icon: Shield,   label: 'IAM' };
+      case 'ssm-session': return { tone: 'amber',  Icon: Network,  label: 'SSM' };
+      default:            return { tone: 'muted',  Icon: Tag,      label: 'OTH' };
+    }
+  }
+
+  function stateBadgeClass(state: SessionStatus['state'] | undefined): string | null {
+    if (!state) return null;
+    if (state === 'running' || state === 'connected') return 'is-ok';
+    if (state === 'starting') return 'is-info';
+    if (state === 'expired') return 'is-warn';
+    if (state === 'error') return 'is-err';
+    return null;
+  }
+
+  function stateBadgeText(state: SessionStatus['state'] | undefined): string | null {
+    if (!state) return null;
+    if (state === 'running' || state === 'connected') return 'active';
+    if (state === 'starting') return 'starting';
+    if (state === 'expired') return 'expired';
+    if (state === 'error') return 'error';
+    return null;
+  }
+
+  function subline(a: Alias, st: SessionStatus | undefined, now: number): string {
+    if (st && isActive(st) && st.startedAt) {
+      void now;
+      return `${a.command.split(/\s+/)[0] ?? a.kind} · up ${uptimeFrom(st.startedAt)}`;
+    }
+    if (a.profile) return `${a.kind} · ${a.profile}`;
+    const port = portHint(a);
+    return port ?? a.command;
+  }
 </script>
 
-<div class="flex h-full flex-col">
-  <div class="flex items-center gap-2 border-b border-border px-3 py-2">
-    <div class="relative flex-1">
-      <Search class="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-      <Input
+<div class="tui-split-list">
+  <div class="tui-split-list-header">
+    <div class="tui-search">
+      <span class="tui-search-icon"><Search size={13} strokeWidth={1.8} /></span>
+      <input
+        bind:this={searchInput}
         bind:value={filter}
-        bind:ref={searchInput}
-        placeholder="Filter aliases…  (press /)"
-        class="h-8 pl-7 text-xs"
+        class="tui-search-input"
+        placeholder="Filter aliases…"
         spellcheck={false}
       />
+      <span class="tui-search-kbd"><kbd class="tui-kbd">/</kbd></span>
     </div>
-    <span class="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-      {visibleAliasCount}/{totalCount}
-    </span>
+    <div class="tui-split-list-meta">
+      <span>{visibleAliasCount} of {totalCount}</span>
+      <span class="tui-split-list-meta-mono">
+        {runningCount > 0 ? `${runningCount} running` : 'all idle'}
+      </span>
+    </div>
   </div>
 
-  <div bind:this={listEl} class="min-h-0 flex-1 overflow-auto py-1">
+  <div bind:this={listEl} class="tui-split-list-body">
     {#each rows as row (row.key)}
       {#if row.type === 'group'}
-        {@const GroupIcon = row.group.icon}
         {@const total = row.group.subgroups.reduce((acc, sg) => acc + sg.aliases.length, 0)}
-        {@const isCollapsed = collapsed[row.group.name]}
+        {@const isCollapsed = !!collapsed[row.group.name]}
         <button
           type="button"
+          class="tui-group-header"
+          class:is-collapsed={isCollapsed}
           onclick={() => onToggleGroup(row.group.name)}
-          class="flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-xs font-semibold tracking-tight transition-colors hover:bg-accent/40"
         >
-          {#if isCollapsed}
-            <ChevronRight class="h-3 w-3 text-muted-foreground" />
-          {:else}
-            <ChevronDown class="h-3 w-3 text-muted-foreground" />
-          {/if}
-          <GroupIcon class="h-3.5 w-3.5 text-primary" />
-          <span class="flex-1 truncate">{row.group.name}</span>
-          <span class="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-            {total}
-          </span>
+          <span class="tui-group-header-chev"><ChevronDown size={11} strokeWidth={2} /></span>
+          <span>{row.group.name}</span>
+          <span class="tui-group-header-line"></span>
+          <span class="tui-group-header-count">{total}</span>
         </button>
       {:else if row.type === 'subgroup'}
-        {@const SubIcon = subgroupIcon(row.subgroupName!)}
-        <div class="flex items-center gap-1.5 px-2 py-1 pl-7 text-[10px] uppercase tracking-wider text-muted-foreground">
-          <SubIcon class="h-3 w-3" />
-          <span class="truncate">{row.subgroupName}</span>
-          <span class="h-px flex-1 bg-border/60"></span>
+        <div class="tui-subgroup">
+          <span>{row.subgroupName}</span>
+          <span class="tui-subgroup-line"></span>
         </div>
       {:else}
         {@const a = row.alias!}
         {@const st = sessions[a.name]}
         {@const tone = stateTone(st?.state)}
         {@const selected = selectedAlias === a.name}
-        {@const port = portHint(a)}
+        {@const km = kindMeta(a.kind)}
+        {@const KindIcon = km.Icon}
+        {@const badgeClass = stateBadgeClass(st?.state)}
+        {@const badgeText = stateBadgeText(st?.state)}
+        {@const active = isActive(st)}
         <button
           type="button"
           data-alias={a.name}
+          class="tui-alias-row tui-alias-row-rich"
+          class:is-selected={selected}
+          class:is-active={active}
           onclick={() => onSelect(a.name)}
-          class={cn(
-            'group flex w-full items-center gap-2 py-1 pl-3 pr-2 text-left text-xs transition-colors',
-            selected
-              ? 'bg-accent/70'
-              : 'hover:bg-accent/30'
-          )}
         >
-          <span
-            class={cn(
-              'h-5 w-0.5 shrink-0 rounded-r',
-              selected ? `bg-status-${tone === 'muted' ? 'info' : tone}` : 'bg-transparent'
-            )}
-          ></span>
-          <span class="ml-1 shrink-0">
-            <StatusDot tone={tone} pulse={st?.state === 'starting'} />
-          </span>
-          <span
-            class={cn(
-              'flex-1 truncate font-mono',
-              selected
-                ? 'font-semibold text-foreground'
-                : isActive(st)
-                  ? 'text-foreground'
-                  : 'text-muted-foreground'
-            )}
-          >
-            {a.name}
-          </span>
-          {#if port}
-            <span class="shrink-0 font-mono text-[10px] text-muted-foreground/80">
-              {port.length > 22 ? port.slice(0, 21) + '…' : port}
+          <span class="tui-alias-row-kind">
+            <span class={`tui-kind tui-kind-${km.tone} tui-kind-compact`} title={km.label}>
+              <KindIcon size={11} strokeWidth={2} />
             </span>
-          {:else if a.profile}
-            <span class="shrink-0 font-mono text-[10px] text-muted-foreground/80">
-              {a.profile}
+          </span>
+          <span class="tui-alias-row-body">
+            <span class="tui-alias-row-line1">
+              <StatusDot tone={tone} pulse={st?.state === 'starting'} size={6} />
+              <span class="tui-alias-name">{a.name}</span>
+              {#if badgeText}
+                <span class={`tui-alias-row-state ${badgeClass}`}>{badgeText}</span>
+              {/if}
             </span>
-          {/if}
+            <span class="tui-alias-row-line2" title={a.command}>
+              {subline(a, st, nowTick)}
+            </span>
+          </span>
         </button>
       {/if}
     {/each}
 
     {#if rows.length === 0}
-      <p class="px-4 py-8 text-center text-xs text-muted-foreground">
+      <p style="padding: 24px 16px; text-align: center; color: var(--tui-fg-4); font-size: 12px;">
         {filter ? 'No aliases match' : 'No aliases loaded'}
       </p>
     {/if}

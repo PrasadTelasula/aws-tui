@@ -3,7 +3,8 @@
   import { get } from 'svelte/store';
   import { ipc } from '$lib/ipc';
   import { profile, region } from '$lib/stores/aws';
-  import { Trash2, TerminalSquare, CircleDot } from 'lucide-svelte';
+  import StatusDot from '$lib/components/status-dot.svelte';
+  import { TerminalSquare, Trash2, MapPin } from 'lucide-svelte';
 
   let container: HTMLDivElement;
   let term: any = null;
@@ -21,31 +22,31 @@
     const { WebLinksAddon } = await import('@xterm/addon-web-links');
 
     term = new Terminal({
-      fontFamily: '"JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace',
+      fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
       fontSize: 13,
       lineHeight: 1.5,
       theme: {
-        background: '#0d1117',
-        foreground: '#e6edf3',
-        cursor: '#e6edf3',
-        cursorAccent: '#0d1117',
-        selectionBackground: 'rgba(175, 127, 57, 0.3)',
-        black: '#21262d',
-        brightBlack: '#6e7681',
-        red: '#ff7b72',
-        brightRed: '#ffa198',
-        green: '#3fb950',
-        brightGreen: '#56d364',
-        yellow: '#d29922',
-        brightYellow: '#e3b341',
-        blue: '#58a6ff',
-        brightBlue: '#79c0ff',
-        magenta: '#bc8cff',
-        brightMagenta: '#d2a8ff',
-        cyan: '#39c5cf',
-        brightCyan: '#56d4dd',
-        white: '#b1bac4',
-        brightWhite: '#f0f6fc'
+        background: '#07101F',
+        foreground: '#E8EEF6',
+        cursor: '#FFAC33',
+        cursorAccent: '#07101F',
+        selectionBackground: 'rgba(255, 153, 0, 0.25)',
+        black: '#0A1421',
+        brightBlack: '#5D6A82',
+        red: '#F26B6B',
+        brightRed: '#F58A8A',
+        green: '#4ECB71',
+        brightGreen: '#6FD58E',
+        yellow: '#F2B544',
+        brightYellow: '#FFC95E',
+        blue: '#5AA9FF',
+        brightBlue: '#7CBDFF',
+        magenta: '#B07BFF',
+        brightMagenta: '#C499FF',
+        cyan: '#5BD0E0',
+        brightCyan: '#7CDCE8',
+        white: '#B8C4D6',
+        brightWhite: '#E8EEF6'
       },
       cursorBlink: true,
       cursorStyle: 'bar',
@@ -99,43 +100,57 @@
   });
 </script>
 
-<div class="flex h-full flex-col bg-[#0d1117]">
-  <!-- Terminal toolbar -->
-  <div class="flex h-10 shrink-0 items-center gap-3 border-b border-white/5 bg-[#161b22] px-4">
-    <TerminalSquare class="h-3.5 w-3.5 text-white/30" />
-    <span class="text-xs font-medium text-white/50">Terminal</span>
-
-    <!-- Profile · Region -->
-    <div class="flex items-center gap-1.5">
-      <span class="h-3 w-px bg-white/10"></span>
-      <span class="font-mono text-[11px] text-white/30">{$profile}</span>
-      <span class="text-white/20">·</span>
-      <span class="font-mono text-[11px] text-white/30">{$region}</span>
-    </div>
-
-    <!-- Status dot -->
-    <div class="ml-auto flex items-center gap-3">
-      <div class="flex items-center gap-1.5">
-        <span class={connected
-          ? 'h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_6px_theme(colors.emerald.500)]'
-          : 'h-1.5 w-1.5 rounded-full bg-white/20'
-        }></span>
-        <span class="text-[11px] text-white/40">{connected ? 'connected' : 'disconnected'}</span>
+<div class="tui-screen">
+  <div class="tui-term-page">
+    <div class="tui-term-window">
+      <!-- Toolbar -->
+      <div class="tui-term-toolbar">
+        <span style="display: inline-flex; color: var(--tui-fg-3);">
+          <TerminalSquare size={13} strokeWidth={1.7} />
+        </span>
+        <span style="font-weight: 600; color: var(--tui-fg-2); font-size: 12px;">Terminal</span>
+        <span class="tui-term-toolbar-meta">
+          <span style="color: var(--tui-fg-4);">·</span>
+          <strong style="color: var(--tui-fg-2); font-weight: 600;">{$profile}</strong>
+          <span style="color: var(--tui-fg-4);">·</span>
+          <strong style="color: var(--tui-fg-2); font-weight: 600;">{$region}</strong>
+        </span>
+        <div class="tui-term-toolbar-spacer"></div>
+        <span class={`tui-term-toolbar-status ${connected ? '' : 'is-off'}`}>
+          <StatusDot tone={connected ? 'ok' : 'muted'} size={5} pulse={connected} />
+          {connected ? 'connected' : 'disconnected'}
+        </span>
+        <button
+          type="button"
+          class="tui-btn tui-btn-ghost tui-btn-sm"
+          onclick={() => term?.clear()}
+        >
+          <Trash2 size={11} strokeWidth={1.8} />
+          Clear
+        </button>
       </div>
 
-      <!-- Clear button -->
-      <button
-        onclick={() => term?.clear()}
-        class="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-white/30 transition-colors hover:bg-white/5 hover:text-white/60"
-      >
-        <Trash2 class="h-3 w-3" />
-        Clear
-      </button>
-    </div>
-  </div>
+      <!-- Canvas -->
+      <div class="tui-term-canvas">
+        <div bind:this={container} class="tui-term-canvas-inner"></div>
+      </div>
 
-  <!-- Terminal canvas -->
-  <div class="min-h-0 flex-1">
-    <div bind:this={container} class="h-full px-2 py-1.5"></div>
+      <!-- Status bar -->
+      <div class="tui-term-statusbar">
+        <span class="tui-term-statusbar-cell">
+          <StatusDot tone="ok" size={5} />
+          <strong>{$profile}</strong>
+        </span>
+        <span style="color: var(--tui-fg-4);">·</span>
+        <span class="tui-term-statusbar-cell">
+          <MapPin size={10} />
+          <strong>{$region}</strong>
+        </span>
+        <span class="tui-term-statusbar-spacer"></span>
+        <span class="tui-term-statusbar-cell">
+          <kbd class="tui-kbd">↑</kbd> history · <kbd class="tui-kbd">tab</kbd> complete
+        </span>
+      </div>
+    </div>
   </div>
 </div>

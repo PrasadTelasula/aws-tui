@@ -5,28 +5,23 @@
   import { instances, loading, profile, region } from '$lib/stores/aws';
   import type { Instance } from '$lib/types';
   import PtyTerminal from '$lib/components/pty-terminal.svelte';
-  import { Button } from '$lib/components/ui';
+  import StatusDot from '$lib/components/status-dot.svelte';
   import {
     RefreshCw,
     Search,
-    Terminal,
     Server,
     Copy,
     MapPin,
     Cpu,
-    Network,
+    Network as NetIcon,
     Globe,
     Tag,
-    ChevronDown,
-    ChevronUp,
     Loader2,
-    PlugZap
+    Plug
   } from 'lucide-svelte';
-  import { cn } from '$lib/utils';
 
   let filter = $state('');
   let selected = $state<Instance | null>(null);
-  let tagsOpen = $state(true);
   let termInstance = $state<Instance | null>(null);
   let termKey = $state(0);
   let copiedIp = $state<string | null>(null);
@@ -49,25 +44,11 @@
     termKey += 1;
   }
 
-  function stateColor(s: string) {
-    if (s === 'running') return 'text-status-ok';
-    if (s === 'pending' || s === 'stopping') return 'text-status-warn';
-    if (s === 'terminated' || s === 'shutting-down') return 'text-status-error';
-    return 'text-muted-foreground/50';
-  }
-
-  function stateDot(s: string) {
-    if (s === 'running') return 'bg-status-ok shadow-[0_0_8px_theme(colors.status.ok/60%)]';
-    if (s === 'pending' || s === 'stopping') return 'bg-status-warn';
-    if (s === 'terminated' || s === 'shutting-down') return 'bg-status-error';
-    return 'bg-muted-foreground/30';
-  }
-
-  function statePill(s: string) {
-    if (s === 'running') return 'bg-status-ok/12 text-status-ok border-status-ok/20';
-    if (s === 'pending' || s === 'stopping') return 'bg-status-warn/12 text-status-warn border-status-warn/20';
-    if (s === 'terminated' || s === 'shutting-down') return 'bg-status-error/12 text-status-error border-status-error/20';
-    return 'bg-muted/50 text-muted-foreground border-border';
+  function ec2StateTone(state: string): 'ok' | 'warn' | 'error' | 'muted' {
+    if (state === 'running') return 'ok';
+    if (state === 'pending' || state === 'stopping') return 'warn';
+    if (state === 'terminated' || state === 'shutting-down') return 'error';
+    return 'muted';
   }
 
   async function copyIp(ip: string) {
@@ -95,118 +76,90 @@
   let runningCount = $derived($instances.filter((i) => i.state === 'running').length);
 </script>
 
-<div class="flex h-full flex-col">
+<div class="tui-screen">
   <!-- Toolbar -->
-  <div class="flex h-11 shrink-0 items-center gap-3 border-b border-border bg-card/30 px-4">
-    <Server class="h-4 w-4 text-muted-foreground/60" />
-    <span class="text-sm font-semibold">EC2 Instances</span>
-    {#if $instances.length > 0}
-      <div class="flex items-center gap-1.5">
-        <span class="rounded-full bg-muted px-2 py-0.5 text-[11px] tabular-nums text-muted-foreground">
-          {$instances.length} total
+  <div class="tui-toolbar">
+    <div class="tui-toolbar-title">
+      <span class="tui-toolbar-title-icon"><Server size={15} strokeWidth={1.8} /></span>
+      EC2 Instances
+    </div>
+    <div class="tui-toolbar-stats">
+      <span class="tui-stat"><strong>{$instances.length}</strong> total</span>
+      {#if runningCount > 0}
+        <span class="tui-stat tui-stat-ok">
+          <StatusDot tone="ok" size={5} />
+          <strong>{runningCount}</strong> running
         </span>
-        {#if runningCount > 0}
-          <span class="rounded-full bg-status-ok/15 px-2 py-0.5 text-[11px] tabular-nums text-status-ok">
-            {runningCount} running
-          </span>
-        {/if}
-      </div>
-    {/if}
-    <Button
-      variant="ghost"
-      size="sm"
+      {/if}
+    </div>
+    <div class="tui-toolbar-spacer"></div>
+    <button
+      type="button"
+      class="tui-btn tui-btn-ghost tui-btn-sm"
       onclick={refresh}
       disabled={$loading.instances}
-      class="ml-auto h-8 text-muted-foreground hover:text-foreground"
     >
-      <RefreshCw class={'h-3.5 w-3.5 ' + ($loading.instances ? 'animate-spin' : '')} />
+      <RefreshCw size={12} strokeWidth={1.8} class={$loading.instances ? 'tui-spinner' : ''} />
       Refresh
-    </Button>
+    </button>
   </div>
 
-  <!-- Masterlist layout -->
-  <div class="flex min-h-0 flex-1">
+  <div class="tui-split">
     <!-- LEFT: instance list -->
-    <div class="flex w-80 shrink-0 flex-col border-r border-border bg-sidebar-background">
-      <!-- Search -->
-      <div class="border-b border-border/60 p-2.5">
-        <div class="relative">
-          <Search class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/40" />
+    <div class="tui-split-list">
+      <div class="tui-split-list-header">
+        <div class="tui-search">
+          <span class="tui-search-icon"><Search size={13} strokeWidth={1.8} /></span>
           <input
-            class="h-8 w-full rounded-md border border-border/60 bg-background/60 pl-8 pr-3 text-xs placeholder:text-muted-foreground/40 focus:border-primary/50 focus:bg-background focus:outline-none focus:ring-2 focus:ring-primary/10"
+            class="tui-search-input"
             placeholder="Search instances…"
             bind:value={filter}
+            spellcheck={false}
           />
         </div>
-        {#if filter}
-          <p class="mt-1.5 px-0.5 text-[10px] text-muted-foreground/60">
-            {filtered.length} of {$instances.length} results
-          </p>
-        {/if}
+        <div class="tui-split-list-meta">
+          <span>{filtered.length} results</span>
+          {#if $instances[0]?.az}
+            <span class="tui-split-list-meta-mono">
+              {$instances[0].az.replace(/[a-z]$/, '')}
+            </span>
+          {/if}
+        </div>
       </div>
 
-      <!-- Instance list -->
-      <div class="min-h-0 flex-1 overflow-auto">
+      <div class="tui-split-list-body" style="padding-bottom: 0;">
         {#if $loading.instances}
-          <div class="flex flex-col items-center justify-center gap-2.5 py-12 text-center">
-            <Loader2 class="h-5 w-5 animate-spin text-muted-foreground/40" />
-            <p class="text-xs text-muted-foreground/60">Loading instances…</p>
+          <div class="tui-empty">
+            <Loader2 class="tui-spinner" size={20} />
+            <div class="tui-empty-sub">Loading instances…</div>
           </div>
         {:else if filtered.length === 0}
-          <div class="flex flex-col items-center justify-center gap-2 py-12 text-center">
-            <Server class="h-8 w-8 text-muted-foreground/20" />
-            <p class="text-xs text-muted-foreground/60">
-              {filter ? 'No instances match' : 'No instances found'}
-            </p>
+          <div class="tui-empty">
+            <div class="tui-empty-icon"><Server size={22} strokeWidth={1.5} /></div>
+            <div class="tui-empty-title">{filter ? 'No instances match' : 'No instances found'}</div>
           </div>
         {:else}
           {#each filtered as inst (inst.id)}
+            {@const tone = ec2StateTone(inst.state)}
             {@const isSelected = selected?.id === inst.id}
             <button
-              class={cn(
-                'group relative w-full border-b border-border/30 px-3.5 py-3 text-left transition-colors',
-                isSelected ? 'bg-accent/60' : 'hover:bg-accent/25'
-              )}
-              onclick={() => { selected = inst; tagsOpen = true; }}
+              type="button"
+              class="tui-inst-row"
+              class:is-selected={isSelected}
+              onclick={() => (selected = inst)}
             >
-              <!-- Selection accent -->
-              <div class={cn(
-                'absolute inset-y-0 left-0 w-0.5 transition-all',
-                isSelected ? stateDot(inst.state).includes('ok') ? 'bg-status-ok' : stateDot(inst.state).includes('warn') ? 'bg-status-warn' : stateDot(inst.state).includes('error') ? 'bg-status-error' : 'bg-primary' : 'bg-transparent'
-              )}></div>
-
-              <div class="flex items-start gap-2.5">
-                <!-- Status dot -->
-                <div class={cn('mt-[5px] h-2 w-2 shrink-0 rounded-full', stateDot(inst.state))}></div>
-
-                <!-- Info -->
-                <div class="min-w-0 flex-1">
-                  <p class={cn(
-                    'truncate text-[13px] font-medium leading-tight',
-                    isSelected ? 'text-foreground' : 'text-foreground/90'
-                  )}>
-                    {inst.name ?? inst.id}
-                  </p>
-                  {#if inst.name}
-                    <p class="mt-0.5 truncate font-mono text-[10px] text-muted-foreground/60">
-                      {inst.id}
-                    </p>
+              <StatusDot tone={tone} size={8} pulse={inst.state === 'pending' || inst.state === 'stopping'} />
+              <div class="tui-inst-row-info">
+                <div class="tui-inst-row-name">{inst.name ?? inst.id}</div>
+                <div class="tui-inst-row-id">{inst.id}</div>
+                <div class="tui-inst-row-meta">
+                  <span class="tui-inst-row-type">{inst.instanceType}</span>
+                  {#if inst.az}
+                    <span>{inst.az}</span>
                   {/if}
-                  <div class="mt-1.5 flex items-center gap-1.5">
-                    <span class="rounded bg-muted/70 px-1.5 py-0.5 font-mono text-[10px] text-foreground/60">
-                      {inst.instanceType}
-                    </span>
-                    {#if inst.az}
-                      <span class="text-[10px] text-muted-foreground/50">{inst.az}</span>
-                    {/if}
-                  </div>
                 </div>
-
-                <!-- State text (right-aligned) -->
-                <span class={cn('shrink-0 text-[10px] font-medium', stateColor(inst.state))}>
-                  {inst.state}
-                </span>
               </div>
+              <span class={`tui-pill tui-pill-${tone} tui-pill-sm`}>{inst.state}</span>
             </button>
           {/each}
         {/if}
@@ -214,144 +167,130 @@
     </div>
 
     <!-- RIGHT: detail pane -->
-    <div class="flex min-w-0 flex-1 flex-col overflow-hidden">
+    <div class="tui-split-detail">
       {#if selected}
         {@const inst = selected}
-        <div class="min-h-0 flex-1 overflow-auto">
-          <!-- Hero header -->
-          <div class="border-b border-border/60 px-8 py-6">
-            <div class="flex items-start justify-between gap-4">
-              <div class="min-w-0 flex-1">
-                <h1 class="truncate text-[22px] font-bold tracking-tight">
-                  {inst.name ?? inst.id}
-                </h1>
-                {#if inst.name}
-                  <p class="mt-1 font-mono text-xs text-muted-foreground/60">{inst.id}</p>
+        {@const tone = ec2StateTone(inst.state)}
+        <div class="tui-inst-detail">
+          <div class="tui-inst-hero">
+            <div class="tui-inst-hero-info">
+              <h1 class="tui-inst-hero-title">{inst.name ?? inst.id}</h1>
+              <div class="tui-inst-hero-id">{inst.id}</div>
+              <div class="tui-chip-row">
+                <span class="tui-chip">
+                  <span class="tui-chip-icon"><Cpu size={11} /></span>
+                  <span class="tui-chip-mono">{inst.instanceType}</span>
+                </span>
+                {#if inst.az}
+                  <span class="tui-chip">
+                    <span class="tui-chip-icon"><MapPin size={11} /></span>
+                    {inst.az}
+                  </span>
+                {/if}
+                {#if inst.vpcId}
+                  <span class="tui-chip">
+                    <span class="tui-chip-icon"><NetIcon size={11} /></span>
+                    <span class="tui-chip-mono">{inst.vpcId}</span>
+                  </span>
                 {/if}
               </div>
-              <!-- Status pill -->
-              <span class={cn(
-                'shrink-0 mt-0.5 inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold',
-                statePill(inst.state)
-              )}>
-                <span class={cn('h-1.5 w-1.5 rounded-full', stateDot(inst.state))}></span>
+            </div>
+            <div class="tui-inst-hero-actions">
+              <span class={`tui-pill tui-pill-${tone} tui-pill-md`}>
+                <StatusDot tone={tone} size={6} />
                 {inst.state}
               </span>
-            </div>
-
-            <!-- Quick-info chips -->
-            <div class="mt-4 flex flex-wrap items-center gap-2">
-              <span class="inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-muted/40 px-2.5 py-1 text-xs">
-                <Cpu class="h-3 w-3 text-muted-foreground/60" />
-                <span class="font-mono font-medium">{inst.instanceType}</span>
-              </span>
-              {#if inst.az}
-                <span class="inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-muted/40 px-2.5 py-1 text-xs text-muted-foreground">
-                  <MapPin class="h-3 w-3" />
-                  {inst.az}
-                </span>
-              {/if}
-              {#if inst.vpcId}
-                <span class="inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/40 px-2.5 py-1 font-mono text-[11px] text-muted-foreground">
-                  {inst.vpcId}
-                </span>
+              {#if inst.state === 'running'}
+                <button
+                  type="button"
+                  class="tui-btn tui-btn-default tui-btn-md"
+                  onclick={() => connectSsm(inst)}
+                >
+                  <Plug size={14} strokeWidth={1.8} />
+                  Connect via SSM
+                </button>
               {/if}
             </div>
           </div>
 
-          <!-- Network section -->
           {#if inst.privateIp || inst.publicIp}
-            <div class="border-b border-border/40 px-8 py-5">
-              <h3 class="mb-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50">
-                Network
-              </h3>
-              <div class="grid grid-cols-2 gap-3">
+            <div class="tui-inst-section">
+              <div class="tui-section-label">
+                <span class="tui-section-label-text">
+                  <NetIcon size={12} strokeWidth={2} />
+                  Network
+                </span>
+              </div>
+              <div class="tui-card-grid">
                 {#if inst.privateIp}
                   <button
+                    type="button"
+                    class="tui-info-card"
                     onclick={() => copyIp(inst.privateIp!)}
-                    class="group/ip relative rounded-xl border border-border/60 bg-card px-4 py-3.5 text-left transition-all hover:border-primary/30 hover:bg-primary/5 hover:shadow-sm"
                   >
-                    <div class="flex items-center gap-1.5 text-[10px] text-muted-foreground/60">
-                      <Network class="h-3 w-3" />
-                      <span class="uppercase tracking-wider">Private IP</span>
-                    </div>
-                    <p class="mt-1.5 font-mono text-sm font-semibold">
-                      {copiedIp === inst.privateIp ? '✓ Copied!' : inst.privateIp}
-                    </p>
-                    <Copy class="absolute right-3 top-3 h-3.5 w-3.5 text-transparent transition-colors group-hover/ip:text-muted-foreground/40" />
+                    <span class="tui-info-card-label">
+                      <NetIcon size={11} strokeWidth={2} />
+                      Private IP
+                    </span>
+                    <span class="tui-info-card-value">
+                      {copiedIp === inst.privateIp ? '✓ Copied' : inst.privateIp}
+                    </span>
+                    <span class="tui-info-card-copy"><Copy size={12} /></span>
                   </button>
                 {/if}
                 {#if inst.publicIp}
                   <button
+                    type="button"
+                    class="tui-info-card"
                     onclick={() => copyIp(inst.publicIp!)}
-                    class="group/ip relative rounded-xl border border-border/60 bg-card px-4 py-3.5 text-left transition-all hover:border-primary/30 hover:bg-primary/5 hover:shadow-sm"
                   >
-                    <div class="flex items-center gap-1.5 text-[10px] text-muted-foreground/60">
-                      <Globe class="h-3 w-3" />
-                      <span class="uppercase tracking-wider">Public IP</span>
-                    </div>
-                    <p class="mt-1.5 font-mono text-sm font-semibold">
-                      {copiedIp === inst.publicIp ? '✓ Copied!' : inst.publicIp}
-                    </p>
-                    <Copy class="absolute right-3 top-3 h-3.5 w-3.5 text-transparent transition-colors group-hover/ip:text-muted-foreground/40" />
+                    <span class="tui-info-card-label">
+                      <Globe size={11} strokeWidth={2} />
+                      Public IP
+                    </span>
+                    <span class="tui-info-card-value">
+                      {copiedIp === inst.publicIp ? '✓ Copied' : inst.publicIp}
+                    </span>
+                    <span class="tui-info-card-copy"><Copy size={12} /></span>
                   </button>
+                {:else}
+                  <div class="tui-info-card" style="cursor: default;">
+                    <span class="tui-info-card-label">
+                      <Globe size={11} strokeWidth={2} />
+                      Public IP
+                    </span>
+                    <span class="tui-info-card-value is-muted">none</span>
+                  </div>
                 {/if}
               </div>
             </div>
           {/if}
 
-          <!-- Tags section -->
           {#if Object.keys(inst.tags).length > 0}
-            <div class="border-b border-border/40 px-8 py-5">
-              <button
-                onclick={() => (tagsOpen = !tagsOpen)}
-                class="flex w-full items-center justify-between text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50 transition-colors hover:text-muted-foreground/80"
-              >
-                <span class="flex items-center gap-1.5">
-                  <Tag class="h-3 w-3" />
-                  Tags ({Object.keys(inst.tags).length})
+            <div class="tui-inst-section">
+              <div class="tui-section-label">
+                <span class="tui-section-label-text">
+                  <Tag size={12} strokeWidth={2} />
+                  Tags
+                  <span class="tui-section-count">{Object.keys(inst.tags).length}</span>
                 </span>
-                {#if tagsOpen}
-                  <ChevronUp class="h-3 w-3" />
-                {:else}
-                  <ChevronDown class="h-3 w-3" />
-                {/if}
-              </button>
-              {#if tagsOpen}
-                <div class="mt-3 flex flex-wrap gap-1.5">
-                  {#each Object.entries(inst.tags) as [k, v] (k)}
-                    <span class="inline-flex items-center gap-1 rounded-md border border-border/50 bg-muted/30 px-2 py-1 font-mono text-[11px]">
-                      <span class="text-muted-foreground/70">{k}:</span>
-                      <span class="font-medium">{v}</span>
-                    </span>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          {/if}
-
-          <!-- SSM Connect CTA -->
-          {#if inst.state === 'running'}
-            <div class="px-8 py-5">
-              <h3 class="mb-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50">
-                Actions
-              </h3>
-              <Button
-                class="gap-2"
-                onclick={() => connectSsm(inst)}
-              >
-                <PlugZap class="h-4 w-4" />
-                Open SSM Shell
-              </Button>
+              </div>
+              <div class="tui-tags">
+                {#each Object.entries(inst.tags) as [k, v] (k)}
+                  <span class="tui-tag-pill">
+                    <span class="tui-tag-key">{k}</span>
+                    <span class="tui-tag-val">{v}</span>
+                  </span>
+                {/each}
+              </div>
             </div>
           {/if}
         </div>
 
-        <!-- SSM Terminal -->
         {#if termInstance}
           {@const tinst = termInstance}
           {@const ptyId = `ssm-${tinst.id}-${termKey}`}
-          <div class="h-72 shrink-0 border-t border-border">
+          <div class="tui-pty-footer">
             <PtyTerminal
               {ptyId}
               title="SSM · {tinst.name ?? tinst.id} · {tinst.id}"
@@ -363,17 +302,10 @@
           </div>
         {/if}
       {:else}
-        <!-- Empty state -->
-        <div class="flex flex-1 flex-col items-center justify-center gap-4 text-center">
-          <div class="flex h-16 w-16 items-center justify-center rounded-2xl border border-border/60 bg-card">
-            <Server class="h-7 w-7 text-muted-foreground/30" />
-          </div>
-          <div>
-            <p class="text-sm font-semibold text-foreground/70">Select an instance</p>
-            <p class="mt-1 text-xs text-muted-foreground/50">
-              Choose from the list on the left to view details and connect
-            </p>
-          </div>
+        <div class="tui-empty">
+          <div class="tui-empty-icon"><Server size={22} strokeWidth={1.5} /></div>
+          <div class="tui-empty-title">Select an instance</div>
+          <div class="tui-empty-sub">Choose from the list to view details and connect.</div>
         </div>
       {/if}
     </div>

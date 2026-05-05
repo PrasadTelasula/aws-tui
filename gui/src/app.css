@@ -11,10 +11,13 @@
  */
 
 /* ---- Font loading: all fonts are loaded here, nowhere else ---- */
-@import '@fontsource-variable/inter/wght.css';
-@import '@fontsource-variable/inter/wght-italic.css';
-@import '@fontsource-variable/jetbrains-mono/wght.css';
-@import '@fontsource-variable/jetbrains-mono/wght-italic.css';
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+@import '@fontsource/ibm-plex-sans/600.css';
+@import '@fontsource/ibm-plex-sans/700.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+@import '@fontsource/ibm-plex-mono/600.css';
 
 @import '@xterm/xterm/css/xterm.css';
 
@@ -22,12 +25,16 @@
 @tailwind components;
 @tailwind utilities;
 
+/* AWS-TUI redesign tokens & component classes (post-Tailwind so they win
+   when components mix the two). */
+@import './tui.css';
+
 @layer base {
   :root {
     /* ---------------- Typography ---------------- */
-    --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system,
+    --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system,
       'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-    --font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo,
+    --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo,
       Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 
     --text-xs: 0.75rem;

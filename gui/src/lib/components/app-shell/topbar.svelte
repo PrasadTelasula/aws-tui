@@ -1,29 +1,48 @@
 <script lang="ts">
   import { page } from '$app/stores';
-  import { navEntries } from '$lib/nav';
-  import { sidebarOpen } from '$lib/stores/ui';
   import { profile, region, aliasesPath, aliases } from '$lib/stores/aws';
   import { ipc } from '$lib/ipc';
   import {
-    FolderOpen,
-    Moon,
-    Sun,
+    Activity,
+    Server,
+    Boxes,
+    TerminalSquare,
     ChevronRight,
-    Pencil,
-    Check,
-    PanelLeftOpen
+    Search,
+    FolderOpen,
+    Bell,
+    Settings,
+    Sun,
+    Moon
   } from 'lucide-svelte';
-  import { cn } from '$lib/utils';
 
-  let current = $derived(
-    navEntries.find((e) =>
-      e.href === '/' ? $page.url.pathname === '/' : $page.url.pathname.startsWith(e.href)
-    )
-  );
+  const titles: Record<string, { icon: any; label: string }> = {
+    '/':           { icon: Activity,        label: 'Sessions' },
+    '/instances':  { icon: Server,          label: 'Instances' },
+    '/containers': { icon: Boxes,           label: 'Containers' },
+    '/terminal':   { icon: TerminalSquare,  label: 'Terminal' }
+  };
 
-  let dark = $state(false);
+  let current = $derived.by(() => {
+    const p = $page.url.pathname;
+    if (p === '/') return titles['/'];
+    return titles[Object.keys(titles).find((k) => k !== '/' && p.startsWith(k)) ?? '/'];
+  });
 
-  // Inline-editable profile / region
+  let dark = $state(true);
+  function toggleTheme() {
+    dark = !dark;
+    const root = document.documentElement;
+    if (dark) {
+      root.removeAttribute('data-theme');
+      root.classList.add('dark');
+    } else {
+      root.setAttribute('data-theme', 'light');
+      root.classList.remove('dark');
+    }
+  }
+
+  // Inline-edit profile / region
   let editingProfile = $state(false);
   let editingRegion = $state(false);
   let profileEl = $state<HTMLInputElement | null>(null);
@@ -38,11 +57,6 @@
 
   function commitEdit(e: KeyboardEvent, close: () => void) {
     if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); close(); }
-  }
-
-  function toggleTheme() {
-    dark = !dark;
-    document.documentElement.classList.toggle('dark', dark);
   }
 
   async function pickFile() {
@@ -63,112 +77,121 @@
   }
 
   let basename = $derived($aliasesPath ? $aliasesPath.split(/[\\/]/).pop() : null);
+  let CurrentIcon = $derived(current.icon);
 </script>
 
-<header class="app-chrome-drag flex h-11 shrink-0 items-center gap-2 border-b border-border bg-background/95 px-3 backdrop-blur">
-
-  <!-- Sidebar toggle (shown when sidebar is collapsed) -->
-  {#if !$sidebarOpen}
-    <button
-      onclick={() => sidebarOpen.set(true)}
-      title="Open sidebar (⌘B)"
-      class="app-chrome-no-drag flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
-    >
-      <PanelLeftOpen class="h-4 w-4" />
-    </button>
-    <div class="h-3.5 w-px bg-border"></div>
-  {/if}
-
+<header class="tui-topbar">
   <!-- Breadcrumb -->
-  <div class="flex items-center gap-1.5 text-sm">
-    <span class="text-[11px] font-medium text-muted-foreground/40">AWS TUI</span>
-    {#if current}
-      <ChevronRight class="h-3 w-3 text-muted-foreground/25" />
-      {@const Icon = current.icon}
-      <Icon class="h-3.5 w-3.5 text-muted-foreground/50" />
-      <span class="text-[13px] font-semibold tracking-tight">{current.label}</span>
-    {/if}
+  <div class="tui-breadcrumb">
+    <span class="tui-breadcrumb-org">aws-tui</span>
+    <span class="tui-breadcrumb-sep"><ChevronRight size={11} /></span>
+    <span class="tui-breadcrumb-current">
+      <span class="tui-breadcrumb-current-icon"><CurrentIcon size={13} strokeWidth={1.8} /></span>
+      {current.label}
+    </span>
   </div>
 
-  <div class="app-chrome-no-drag ml-auto flex items-center gap-1">
-    <!-- Aliases file picker -->
+  <!-- Command palette trigger (placeholder — opens search later) -->
+  <button type="button" class="tui-cmd-trigger" style="margin-left: 12px;" onclick={() => { /* TODO: command palette */ }}>
+    <span class="tui-cmd-trigger-icon"><Search size={13} strokeWidth={1.8} /></span>
+    <span>Jump to alias, instance, command…</span>
+    <kbd class="tui-kbd">⌘K</kbd>
+  </button>
+
+  <div class="tui-topbar-spacer"></div>
+
+  <!-- Aliases file pill -->
+  <button
+    type="button"
+    class="tui-context-pill"
+    title={$aliasesPath ?? 'No aliases file loaded'}
+    onclick={pickFile}
+  >
+    <span style="display: inline-flex; color: var(--tui-fg-3);"><FolderOpen size={12} /></span>
+    <span class="tui-context-pill-value">{basename ?? 'Load aliases…'}</span>
+  </button>
+
+  <!-- Profile -->
+  {#if editingProfile}
+    <label class="tui-context-pill is-editing">
+      <span class="tui-context-pill-label">profile</span>
+      <input
+        bind:this={profileEl}
+        bind:value={$profile}
+        onblur={() => (editingProfile = false)}
+        onkeydown={(e) => commitEdit(e, () => (editingProfile = false))}
+        class="tui-context-pill-input"
+        spellcheck={false}
+      />
+    </label>
+  {:else}
     <button
       type="button"
-      onclick={pickFile}
-      title={$aliasesPath ?? 'No aliases file loaded'}
-      class="flex h-7 items-center gap-1.5 rounded-md px-2 text-[11px] text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
+      class="tui-context-pill"
+      onclick={() => (editingProfile = true)}
+      title="Click to edit profile"
     >
-      <FolderOpen class="h-3.5 w-3.5" />
-      <span class="font-mono">{basename ?? 'Load aliases…'}</span>
+      <span class="tui-context-pill-label">profile</span>
+      <span class="tui-context-pill-value">{$profile}</span>
     </button>
+  {/if}
 
-    <div class="h-3.5 w-px bg-border/60 mx-0.5"></div>
-
-    <!-- Profile pill -->
-    {#if editingProfile}
-      <label class="flex h-7 items-center gap-1.5 rounded-md border border-primary/40 bg-background px-2 ring-2 ring-primary/10">
-        <span class="text-[9px] font-semibold uppercase tracking-widest text-muted-foreground/50">profile</span>
-        <input
-          bind:this={profileEl}
-          bind:value={$profile}
-          onblur={() => (editingProfile = false)}
-          onkeydown={(e) => commitEdit(e, () => (editingProfile = false))}
-          class="w-20 bg-transparent font-mono text-[11px] font-medium text-foreground outline-none"
-          spellcheck={false}
-        />
-        <Check class="h-3 w-3 text-primary/60" />
-      </label>
-    {:else}
-      <button
-        onclick={() => (editingProfile = true)}
-        class="group flex h-7 items-center gap-1.5 rounded-md border border-transparent px-2 transition-colors hover:border-border hover:bg-muted/50"
-        title="Click to edit profile"
-      >
-        <span class="text-[9px] font-semibold uppercase tracking-widest text-muted-foreground/35">profile</span>
-        <span class="font-mono text-[11px] font-semibold">{$profile}</span>
-        <Pencil class="h-2.5 w-2.5 text-transparent transition-colors group-hover:text-muted-foreground/40" />
-      </button>
-    {/if}
-
-    <!-- Region pill -->
-    {#if editingRegion}
-      <label class="flex h-7 items-center gap-1.5 rounded-md border border-primary/40 bg-background px-2 ring-2 ring-primary/10">
-        <span class="text-[9px] font-semibold uppercase tracking-widest text-muted-foreground/50">region</span>
-        <input
-          bind:this={regionEl}
-          bind:value={$region}
-          onblur={() => (editingRegion = false)}
-          onkeydown={(e) => commitEdit(e, () => (editingRegion = false))}
-          class="w-24 bg-transparent font-mono text-[11px] font-medium text-foreground outline-none"
-          spellcheck={false}
-        />
-        <Check class="h-3 w-3 text-primary/60" />
-      </label>
-    {:else}
-      <button
-        onclick={() => (editingRegion = true)}
-        class="group flex h-7 items-center gap-1.5 rounded-md border border-transparent px-2 transition-colors hover:border-border hover:bg-muted/50"
-        title="Click to edit region"
-      >
-        <span class="text-[9px] font-semibold uppercase tracking-widest text-muted-foreground/35">region</span>
-        <span class="font-mono text-[11px] font-semibold">{$region}</span>
-        <Pencil class="h-2.5 w-2.5 text-transparent transition-colors group-hover:text-muted-foreground/40" />
-      </button>
-    {/if}
-
-    <div class="h-3.5 w-px bg-border/60 mx-0.5"></div>
-
-    <!-- Theme toggle -->
+  <!-- Region -->
+  {#if editingRegion}
+    <label class="tui-context-pill is-editing">
+      <span class="tui-context-pill-label">region</span>
+      <input
+        bind:this={regionEl}
+        bind:value={$region}
+        onblur={() => (editingRegion = false)}
+        onkeydown={(e) => commitEdit(e, () => (editingRegion = false))}
+        class="tui-context-pill-input"
+        style="width: 9ch;"
+        spellcheck={false}
+      />
+    </label>
+  {:else}
     <button
       type="button"
-      onclick={toggleTheme}
+      class="tui-context-pill"
+      onclick={() => (editingRegion = true)}
+      title="Click to edit region"
+    >
+      <span class="tui-context-pill-label">region</span>
+      <span class="tui-context-pill-value">{$region}</span>
+    </button>
+  {/if}
+
+  <div class="tui-topbar-divider"></div>
+
+  <div class="tui-topbar-right">
+    <button
+      type="button"
+      class="tui-iconbtn tui-iconbtn-md"
+      title="Notifications"
+      aria-label="Notifications"
+    >
+      <Bell size={14} strokeWidth={1.7} />
+    </button>
+    <button
+      type="button"
+      class="tui-iconbtn tui-iconbtn-md"
+      title="Settings"
+      aria-label="Settings"
+    >
+      <Settings size={14} strokeWidth={1.7} />
+    </button>
+    <button
+      type="button"
+      class="tui-iconbtn tui-iconbtn-md"
+      title="Toggle theme"
       aria-label="Toggle theme"
-      class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
+      onclick={toggleTheme}
     >
       {#if dark}
-        <Sun class="h-3.5 w-3.5" />
+        <Sun size={14} strokeWidth={1.7} />
       {:else}
-        <Moon class="h-3.5 w-3.5" />
+        <Moon size={14} strokeWidth={1.7} />
       {/if}
     </button>
   </div>

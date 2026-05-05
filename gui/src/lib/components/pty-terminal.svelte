@@ -26,31 +26,31 @@
     const { WebLinksAddon } = await import('@xterm/addon-web-links');
 
     term = new Terminal({
-      fontFamily: '"JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace',
+      fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
       fontSize: 12.5,
       lineHeight: 1.5,
       theme: {
-        background: '#0d1117',
-        foreground: '#e6edf3',
-        cursor: '#e6edf3',
-        cursorAccent: '#0d1117',
-        selectionBackground: 'rgba(175, 127, 57, 0.3)',
-        black: '#21262d',
-        brightBlack: '#6e7681',
-        red: '#ff7b72',
-        brightRed: '#ffa198',
-        green: '#3fb950',
-        brightGreen: '#56d364',
-        yellow: '#d29922',
-        brightYellow: '#e3b341',
-        blue: '#58a6ff',
-        brightBlue: '#79c0ff',
-        magenta: '#bc8cff',
-        brightMagenta: '#d2a8ff',
-        cyan: '#39c5cf',
-        brightCyan: '#56d4dd',
-        white: '#b1bac4',
-        brightWhite: '#f0f6fc'
+        background: '#07101F',
+        foreground: '#E8EEF6',
+        cursor: '#FFAC33',
+        cursorAccent: '#07101F',
+        selectionBackground: 'rgba(255, 153, 0, 0.25)',
+        black: '#0A1421',
+        brightBlack: '#5D6A82',
+        red: '#F26B6B',
+        brightRed: '#F58A8A',
+        green: '#4ECB71',
+        brightGreen: '#6FD58E',
+        yellow: '#F2B544',
+        brightYellow: '#FFC95E',
+        blue: '#5AA9FF',
+        brightBlue: '#7CBDFF',
+        magenta: '#B07BFF',
+        brightMagenta: '#C499FF',
+        cyan: '#5BD0E0',
+        brightCyan: '#7CDCE8',
+        white: '#B8C4D6',
+        brightWhite: '#E8EEF6'
       },
       cursorBlink: true,
       cursorStyle: 'bar',
@@ -99,37 +99,40 @@
   });
 </script>
 
-<div class="flex h-full flex-col bg-[#0d1117]">
+<div class="flex h-full flex-col" style="background: #07101F;">
   <!-- Header bar -->
-  <div class="flex h-9 shrink-0 items-center gap-2.5 border-b border-white/5 bg-[#161b22] px-3">
-    <PlugZap class="h-3.5 w-3.5 text-white/30" />
+  <div class="tui-pty-header">
+    <span class="tui-pty-header-dots"><span></span><span></span><span></span></span>
+    <span class="tui-pty-header-title">
+      <PlugZap size={13} strokeWidth={1.7} />
 
-    <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-white/40">{title}</span>
+      <span style="min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{title}</span>
+    </span>
 
-    <!-- Status indicator -->
-    <div class="flex items-center gap-1.5">
-      {#if exited}
-        <span class="text-[10px] text-white/30">session ended</span>
-      {:else}
-        <span class={connected
-          ? 'h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_6px_theme(colors.emerald.500)]'
-          : 'h-1.5 w-1.5 rounded-full bg-white/20 animate-pulse'
-        }></span>
-        <span class="text-[10px] text-white/30">{connected ? 'connected' : 'connecting…'}</span>
-      {/if}
-    </div>
+    {#if exited}
+      <span class="tui-pty-header-status" style="color: var(--tui-fg-4);">session ended</span>
+    {:else}
+      <span class="tui-pty-header-status" style={connected ? '' : 'color: var(--tui-fg-4);'}>
+        <span
+          class={connected ? 'tui-dot tui-dot-ok' : 'tui-dot tui-dot-muted'}
+          style="width: 5px; height: 5px;"
+        ></span>
+        {connected ? 'connected' : 'connecting…'}
+      </span>
+    {/if}
 
     {#if onClose}
       <button
+        type="button"
         onclick={onClose}
-        class="ml-1 rounded p-0.5 text-white/25 transition-colors hover:bg-white/5 hover:text-white/60"
+        class="tui-iconbtn tui-iconbtn-sm"
         aria-label="Close terminal"
       >
-        <X class="h-3.5 w-3.5" />
+        <X size={13} strokeWidth={1.7} />
       </button>
     {/if}
   </div>
 
   <!-- Terminal canvas -->
-  <div bind:this={container} class="min-h-0 flex-1 px-2 py-1"></div>
+  <div bind:this={container} class="tui-pty-body" style="padding: 8px 10px;"></div>
 </div>

@@ -4,15 +4,54 @@
   import { ipc } from '$lib/ipc';
   import type { Alias, SessionStatus } from '$lib/types';
   import { aliases, aliasesPath, sessions, loading } from '$lib/stores/aws';
-  import { groupAliases, isActive } from '$lib/sessions-helpers';
+  import { groupAliases, isActive, kindLabel, kindIcon } from '$lib/sessions-helpers';
   import type { AliasGroup } from '$lib/sessions-helpers';
   import { flatten } from '$lib/components/sessions/session-list.svelte';
-  import SessionList from '$lib/components/sessions/session-list.svelte';
   import SessionDetail from '$lib/components/sessions/session-detail.svelte';
   import CredentialsModal from '$lib/components/credentials-modal.svelte';
   import ConfirmModal from '$lib/components/confirm-modal.svelte';
-  import { Button, Kbd } from '$lib/components/ui';
-  import { PowerOff, RefreshCw } from 'lucide-svelte';
+  import StatusDot from '$lib/components/status-dot.svelte';
+  import {
+    PowerOff,
+    RefreshCw,
+    Activity,
+    Tag,
+    LogIn,
+    Shield,
+    Network,
+    Search as SearchIcon,
+    ChevronDown
+  } from 'lucide-svelte';
+  import { uptimeFrom } from '$lib/utils';
+  import { stateTone, portHint } from '$lib/sessions-helpers';
+
+  function kindMeta(kind: Alias['kind']): { tone: string; Icon: any; label: string } {
+    switch (kind) {
+      case 'sso-login':   return { tone: 'violet', Icon: LogIn,   label: 'SSO' };
+      case 'iam-profile': return { tone: 'cyan',   Icon: Shield,  label: 'IAM' };
+      case 'ssm-session': return { tone: 'amber',  Icon: Network, label: 'SSM' };
+      default:            return { tone: 'muted',  Icon: Tag,     label: 'OTH' };
+    }
+  }
+
+  function stateBadge(state: SessionStatus['state'] | undefined): { cls: string; text: string } | null {
+    if (!state) return null;
+    if (state === 'running' || state === 'connected') return { cls: 'is-ok',   text: 'active' };
+    if (state === 'starting')                          return { cls: 'is-info', text: 'starting' };
+    if (state === 'expired')                           return { cls: 'is-warn', text: 'expired' };
+    if (state === 'error')                             return { cls: 'is-err',  text: 'error' };
+    return null;
+  }
+
+  function aliasSubline(a: Alias, st: SessionStatus | undefined, nowMs: number): string {
+    if (st && isActive(st) && st.startedAt) {
+      void nowMs;
+      return `${a.command.split(/\s+/)[0] ?? a.kind} · up ${uptimeFrom(st.startedAt)}`;
+    }
+    if (a.profile) return `${a.kind} · ${a.profile}`;
+    const port = portHint(a);
+    return port ?? a.command;
+  }
 
   let filter = $state('');
   let loadError = $state<string | null>(null);
@@ -23,6 +62,7 @@
   let collapsed = $state<Record<string, boolean>>({});
   let now = $state(Date.now());
   let searchInput: HTMLInputElement | undefined = $state();
+  let groupBy = $state<'group' | 'status' | 'flat'>('group');
 
   const unlistens: Map<string, UnlistenFn[]> = new Map();
   let unlistenChanged: UnlistenFn | null = null;
@@ -153,7 +193,7 @@
       try {
         await navigator.clipboard.writeText(cmd);
       } catch {
-        // ignore
+        /* ignore */
       }
     }
   }
@@ -175,7 +215,50 @@
     );
   }
 
-  let groups: AliasGroup[] = $derived(groupAliases($aliases.filter(matchesFilter)));
+  let filteredAliases = $derived($aliases.filter(matchesFilter));
+
+  let groups: AliasGroup[] = $derived.by(() => {
+    if (groupBy === 'flat') {
+      return [{
+        name: 'All aliases',
+        icon: Tag as any,
+        explicit: false,
+        subgroups: [{ name: '', aliases: filteredAliases }]
+      }];
+    }
+    if (groupBy === 'status') {
+      const buckets: Record<string, Alias[]> = {
+        running: [],
+        starting: [],
+        connected: [],
+        expired: [],
+        error: [],
+        stopped: []
+      };
+      for (const a of filteredAliases) {
+        const st = $sessions[a.name]?.state ?? 'stopped';
+        (buckets[st] ?? buckets.stopped).push(a);
+      }
+      const order: Array<[string, string]> = [
+        ['running',   'Active'],
+        ['connected', 'Connected'],
+        ['starting',  'Starting'],
+        ['expired',   'Token expired'],
+        ['error',     'Errors'],
+        ['stopped',   'Idle']
+      ];
+      return order
+        .filter(([k]) => (buckets[k]?.length ?? 0) > 0)
+        .map(([k, label]) => ({
+          name: label,
+          icon: Tag as any,
+          explicit: true,
+          subgroups: [{ name: '', aliases: buckets[k] }]
+        }));
+    }
+    return groupAliases(filteredAliases);
+  });
+
   let runningCount = $derived(
     Object.values($sessions).filter((s) => isActive(s)).length
   );
@@ -184,12 +267,10 @@
   );
 
   // ─── Keyboard shortcuts ─────────────────────────────────────────────
-
   function onKeydown(e: KeyboardEvent) {
     const tag = (e.target as HTMLElement | null)?.tagName ?? '';
     const inInput = ['INPUT', 'TEXTAREA'].includes(tag);
 
-    // Global: '/' focuses search (works even when input has focus)
     if (e.key === '/' && !inInput) {
       e.preventDefault();
       searchInput?.focus();
@@ -197,7 +278,6 @@
       return;
     }
 
-    // Esc clears selection state
     if (e.key === 'Escape') {
       if (credentialsFor) { credentialsFor = null; return; }
       if (confirmStopAll) { confirmStopAll = false; return; }
@@ -227,12 +307,12 @@
       if (prev.alias) selectAlias(prev.alias.name);
       return;
     }
-    if (e.key === 'Home' || e.key === 'g') {
+    if (e.key === 'Home') {
       e.preventDefault();
       if (flat[0]?.alias) selectAlias(flat[0].alias.name);
       return;
     }
-    if (e.key === 'End' || e.key === 'G') {
+    if (e.key === 'End') {
       e.preventDefault();
       const last = flat[flat.length - 1];
       if (last.alias) selectAlias(last.alias.name);
@@ -266,57 +346,182 @@
   }
 </script>
 
-<div class="flex h-full flex-col">
-  <div class="flex items-center justify-between gap-3 border-b border-border bg-background px-4 py-2">
-    <div class="flex items-center gap-2 text-xs text-muted-foreground">
-      {#if $aliasesPath}
-        <span class="font-mono">
-          {$aliasesPath.split(/[\\/]/).pop()}
+<div class="tui-screen">
+  <!-- Toolbar -->
+  <div class="tui-toolbar">
+    <div class="tui-toolbar-title">
+      <span class="tui-toolbar-title-icon"><Activity size={15} strokeWidth={1.8} /></span>
+      Sessions
+    </div>
+    <div class="tui-toolbar-stats">
+      <span class="tui-stat"><strong>{$aliases.length}</strong> aliases</span>
+      {#if runningCount > 0}
+        <span class="tui-stat tui-stat-ok">
+          <StatusDot tone="ok" size={5} />
+          <strong>{runningCount}</strong> active
         </span>
-        <span>·</span>
-      {/if}
-      <span>{$aliases.length} aliases</span>
-      {#if runningCount > 0}
-        <span class="text-status-ok">· {runningCount} active</span>
       {/if}
     </div>
-    <div class="flex items-center gap-1.5">
-      <span class="hidden text-[10px] text-muted-foreground sm:inline">
-        <Kbd>↑↓</Kbd> nav · <Kbd>Enter</Kbd> start · <Kbd>s</Kbd> stop · <Kbd>/</Kbd> search
-      </span>
-      {#if runningCount > 0}
-        <Button variant="outline" size="sm" onclick={() => (confirmStopAll = true)}>
-          <PowerOff class="h-3.5 w-3.5" /> Stop all
-        </Button>
-      {/if}
-      <Button variant="outline" size="sm" onclick={refresh} disabled={$loading.aliases}>
-        <RefreshCw class={'h-3.5 w-3.5 ' + ($loading.aliases ? 'animate-spin' : '')} />
-        Refresh
-      </Button>
+    <div class="tui-toolbar-spacer"></div>
+    <div class="tui-toolbar-shortcut-hint">
+      <span><kbd class="tui-kbd">↑↓</kbd> nav</span>
+      <span><kbd class="tui-kbd">↵</kbd> start</span>
+      <span><kbd class="tui-kbd">s</kbd> stop</span>
+      <span><kbd class="tui-kbd">/</kbd> search</span>
     </div>
+    {#if runningCount > 0}
+      <button
+        type="button"
+        class="tui-btn tui-btn-destructive tui-btn-sm"
+        onclick={() => (confirmStopAll = true)}
+      >
+        <PowerOff size={12} strokeWidth={1.8} />
+        Stop all
+      </button>
+    {/if}
+    <button
+      type="button"
+      class="tui-btn tui-btn-ghost tui-btn-sm"
+      onclick={refresh}
+      disabled={$loading.aliases}
+    >
+      <RefreshCw size={12} strokeWidth={1.8} class={$loading.aliases ? 'tui-spinner' : ''} />
+      Refresh
+    </button>
   </div>
 
   {#if loadError}
-    <div class="border-b border-status-error/30 bg-status-error/10 px-4 py-2 text-xs text-status-error">
+    <div
+      style="padding: 8px 14px; font-size: 12px; color: var(--tui-err); background: var(--tui-err-soft); border-bottom: 1px solid rgba(242,107,107,0.2);"
+    >
       {loadError}
     </div>
   {/if}
 
-  <div class="flex min-h-0 flex-1">
-    <aside class="flex w-80 shrink-0 flex-col border-r border-border bg-card/30">
-      <SessionList
-        {groups}
-        sessions={$sessions}
-        bind:selectedAlias
-        bind:filter
-        onSelect={selectAlias}
-        onToggleGroup={toggleGroup}
-        {collapsed}
-        bind:searchInput
-        totalCount={$aliases.length}
-      />
-    </aside>
-    <main class="min-w-0 flex-1 bg-background">
+  <div class="tui-split">
+    <div class="tui-split-list">
+      <div class="tui-split-list-header">
+        <div class="tui-search">
+          <span class="tui-search-icon">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="7" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+          </span>
+          <input
+            bind:this={searchInput}
+            bind:value={filter}
+            class="tui-search-input"
+            placeholder="Filter aliases…"
+            spellcheck={false}
+          />
+          <span class="tui-search-kbd"><kbd class="tui-kbd">/</kbd></span>
+        </div>
+        <div class="tui-list-controls">
+          <span class="tui-list-controls-label">Group by</span>
+          <div class="tui-seg">
+            <button
+              type="button"
+              class="tui-seg-btn"
+              class:is-active={groupBy === 'group'}
+              onclick={() => (groupBy = 'group')}
+            >Type</button>
+            <button
+              type="button"
+              class="tui-seg-btn"
+              class:is-active={groupBy === 'status'}
+              onclick={() => (groupBy = 'status')}
+            >Status</button>
+            <button
+              type="button"
+              class="tui-seg-btn"
+              class:is-active={groupBy === 'flat'}
+              onclick={() => (groupBy = 'flat')}
+            >None</button>
+          </div>
+        </div>
+        <div class="tui-split-list-meta">
+          <span>{filteredAliases.length} of {$aliases.length}</span>
+          <span class="tui-split-list-meta-mono">
+            {runningCount > 0 ? `${runningCount} running` : 'all idle'}
+          </span>
+        </div>
+      </div>
+
+      <div class="tui-split-list-body">
+        {#each groups as g (g.name)}
+          {@const total = g.subgroups.reduce((acc, sg) => acc + sg.aliases.length, 0)}
+          {@const isCollapsed = !!collapsed[g.name]}
+          <button
+            type="button"
+            class="tui-group-header"
+            class:is-collapsed={isCollapsed}
+            onclick={() => toggleGroup(g.name)}
+          >
+            <span class="tui-group-header-chev">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </span>
+            <span>{g.name}</span>
+            <span class="tui-group-header-line"></span>
+            <span class="tui-group-header-count">{total}</span>
+          </button>
+          {#if !isCollapsed}
+            {#each g.subgroups as sg (sg.name || '_')}
+              {#if sg.name}
+                <div class="tui-subgroup">
+                  <span>{sg.name}</span>
+                  <span class="tui-subgroup-line"></span>
+                </div>
+              {/if}
+              {#each sg.aliases as a (a.name)}
+                {@const st = $sessions[a.name]}
+                {@const selected = selectedAlias === a.name}
+                {@const km = kindMeta(a.kind)}
+                {@const KindIcon = km.Icon}
+                {@const badge = stateBadge(st?.state)}
+                {@const tone = stateTone(st?.state)}
+                {@const active = isActive(st)}
+                <button
+                  type="button"
+                  data-alias={a.name}
+                  class="tui-alias-row tui-alias-row-rich"
+                  class:is-selected={selected}
+                  class:is-active={active}
+                  onclick={() => selectAlias(a.name)}
+                >
+                  <span class="tui-alias-row-kind">
+                    <span class={`tui-kind tui-kind-${km.tone} tui-kind-compact`} title={km.label}>
+                      <KindIcon size={11} strokeWidth={2} />
+                    </span>
+                  </span>
+                  <span class="tui-alias-row-body">
+                    <span class="tui-alias-row-line1">
+                      <StatusDot tone={tone} pulse={st?.state === 'starting'} size={6} />
+                      <span class="tui-alias-name">{a.name}</span>
+                      {#if badge}
+                        <span class={`tui-alias-row-state ${badge.cls}`}>{badge.text}</span>
+                      {/if}
+                    </span>
+                    <span class="tui-alias-row-line2" title={a.command}>
+                      {aliasSubline(a, st, now)}
+                    </span>
+                  </span>
+                </button>
+              {/each}
+            {/each}
+          {/if}
+        {/each}
+        {#if groups.length === 0}
+          <p style="padding: 24px 16px; text-align: center; color: var(--tui-fg-4); font-size: 12px;">
+            {filter ? 'No aliases match' : 'No aliases loaded'}
+          </p>
+        {/if}
+      </div>
+    </div>
+
+    <div class="tui-split-detail">
       <SessionDetail
         alias={selectedAliasObj}
         status={selectedAlias ? $sessions[selectedAlias] : undefined}
@@ -327,7 +532,7 @@
         onShowCredentials={(name) => (credentialsFor = name)}
         onCopyCommand={copyCommand}
       />
-    </main>
+    </div>
   </div>
 </div>
 
@@ -349,3 +554,4 @@
     onCancel={() => (confirmStopAll = false)}
   />
 {/if}
+

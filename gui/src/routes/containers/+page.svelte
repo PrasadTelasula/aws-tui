@@ -5,21 +5,18 @@
   import { clusters, loading, profile, region } from '$lib/stores/aws';
   import type { Cluster, Container, Service, Task } from '$lib/types';
   import PtyTerminal from '$lib/components/pty-terminal.svelte';
-  import { Badge, Button } from '$lib/components/ui';
+  import StatusDot from '$lib/components/status-dot.svelte';
   import {
     ChevronRight,
-    ChevronDown,
     RefreshCw,
-    Terminal,
     Boxes,
     Layers,
-    CircleDot,
     Loader2,
     Box,
-    PlugZap,
-    Hash
+    Plug,
+    Cpu,
+    Database
   } from 'lucide-svelte';
-  import { cn } from '$lib/utils';
 
   type ServiceNode = Service & { tasks?: Task[]; expanded?: boolean; loading?: boolean };
   type ClusterNode = Cluster & { services?: ServiceNode[]; expanded?: boolean; loading?: boolean };
@@ -101,278 +98,203 @@
   let totalRunning = $derived($clusters.reduce((a, c) => a + c.runningTasks, 0));
 </script>
 
-<div class="flex h-full flex-col">
+<div class="tui-screen">
   <!-- Toolbar -->
-  <div class="flex h-11 shrink-0 items-center gap-3 border-b border-border bg-card/30 px-4">
-    <Boxes class="h-4 w-4 text-muted-foreground/60" />
-    <span class="text-sm font-semibold">Containers</span>
-    {#if $clusters.length > 0}
-      <div class="flex items-center gap-1.5">
-        <span class="rounded-full bg-muted px-2 py-0.5 text-[11px] tabular-nums text-muted-foreground">
-          {$clusters.length} cluster{$clusters.length !== 1 ? 's' : ''}
+  <div class="tui-toolbar">
+    <div class="tui-toolbar-title">
+      <span class="tui-toolbar-title-icon"><Boxes size={15} strokeWidth={1.8} /></span>
+      ECS Clusters
+    </div>
+    <div class="tui-toolbar-stats">
+      <span class="tui-stat">
+        <strong>{$clusters.length}</strong> cluster{$clusters.length !== 1 ? 's' : ''}
+      </span>
+      {#if totalRunning > 0}
+        <span class="tui-stat tui-stat-ok">
+          <StatusDot tone="ok" size={5} />
+          <strong>{totalRunning}</strong> running tasks
         </span>
-        {#if totalRunning > 0}
-          <span class="rounded-full bg-status-ok/15 px-2 py-0.5 text-[11px] tabular-nums text-status-ok">
-            {totalRunning} running
-          </span>
-        {/if}
-      </div>
-    {/if}
-    <Button
-      variant="ghost"
-      size="sm"
+      {/if}
+    </div>
+    <div class="tui-toolbar-spacer"></div>
+    <button
+      type="button"
+      class="tui-btn tui-btn-ghost tui-btn-sm"
       onclick={refresh}
       disabled={$loading.clusters}
-      class="ml-auto h-8 text-muted-foreground hover:text-foreground"
     >
-      <RefreshCw class={'h-3.5 w-3.5 ' + ($loading.clusters ? 'animate-spin' : '')} />
+      <RefreshCw size={12} strokeWidth={1.8} class={$loading.clusters ? 'tui-spinner' : ''} />
       Refresh
-    </Button>
+    </button>
   </div>
 
-  <!-- Main split -->
-  <div class="flex min-h-0 flex-1">
+  <div class="tui-split tui-split-narrow">
     <!-- Tree sidebar -->
-    <div class="flex w-60 shrink-0 flex-col border-r border-border bg-sidebar-background">
-      <div class="border-b border-border/60 px-4 py-2.5">
-        <p class="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50">
-          Clusters
-        </p>
+    <div class="tui-split-list">
+      <div class="tui-split-list-header" style="padding-bottom: 8px;">
+        <div class="tui-section-label" style="padding: 0;">
+          <span class="tui-section-label-text">
+            <Layers size={11} strokeWidth={2} />
+            Cluster Tree
+          </span>
+        </div>
       </div>
 
-      <div class="min-h-0 flex-1 overflow-auto py-1.5">
+      <div class="tui-split-list-body">
         {#if $loading.clusters}
-          <div class="flex items-center gap-2 px-4 py-5 text-xs text-muted-foreground/60">
-            <Loader2 class="h-3.5 w-3.5 animate-spin" />
-            Loading clusters…
+          <div class="tui-empty">
+            <Loader2 class="tui-spinner" size={20} />
+            <div class="tui-empty-sub">Loading clusters…</div>
           </div>
         {:else if tree.length === 0}
-          <div class="flex flex-col items-center justify-center gap-2 py-10 text-center">
-            <Boxes class="h-7 w-7 text-muted-foreground/20" />
-            <p class="text-xs text-muted-foreground/50">No clusters found</p>
+          <div class="tui-empty">
+            <div class="tui-empty-icon"><Boxes size={22} strokeWidth={1.5} /></div>
+            <div class="tui-empty-sub">No clusters found</div>
           </div>
         {/if}
 
         {#each tree as c (c.arn)}
-          <!-- Cluster header -->
           <button
-            class="flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-sidebar-accent/60"
+            type="button"
+            class="tui-tree-row is-cluster"
             onclick={() => toggleCluster(c)}
           >
-            <span class="text-muted-foreground/50">
-              {#if c.expanded}
-                <ChevronDown class="h-3.5 w-3.5" />
-              {:else}
-                <ChevronRight class="h-3.5 w-3.5" />
-              {/if}
+            <span class="tui-tree-chev" class:is-open={c.expanded}>
+              <ChevronRight size={11} strokeWidth={2} />
             </span>
-            <Layers class="h-3.5 w-3.5 shrink-0 text-blue-400" />
-            <span class="flex-1 truncate font-mono text-[11px] font-semibold">{c.name}</span>
-            <span class={cn(
-              'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] tabular-nums',
-              c.runningTasks > 0
-                ? 'bg-status-ok/15 text-status-ok'
-                : 'bg-muted/60 text-muted-foreground'
-            )}>
+            <span class="tui-tree-icon-cluster"><Layers size={13} strokeWidth={1.8} /></span>
+            <span class="tui-tree-name tui-tree-cluster-name">{c.name}</span>
+            <span class={`tui-tree-count ${c.runningTasks > 0 ? 'is-ok' : ''}`}>
               {c.runningTasks}
             </span>
           </button>
 
           {#if c.expanded}
-            <!-- Services -->
-            <div class="ml-4 border-l border-border/40 pb-1">
-              {#if c.loading}
-                <div class="flex items-center gap-2 py-2 pl-3 text-[11px] text-muted-foreground/60">
-                  <Loader2 class="h-3 w-3 animate-spin" /> Loading…
-                </div>
-              {/if}
-              {#each c.services ?? [] as s (s.arn)}
-                {@const health = serviceHealth(s)}
-                <button
-                  class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-sidebar-accent/50"
-                  onclick={() => toggleService(c, s)}
-                >
-                  <span class="text-muted-foreground/40">
-                    {#if s.expanded}
-                      <ChevronDown class="h-3 w-3" />
-                    {:else}
-                      <ChevronRight class="h-3 w-3" />
-                    {/if}
-                  </span>
-                  <span class="flex-1 truncate font-mono text-[11px] text-foreground/80">{s.name}</span>
-                  <!-- Health indicator -->
-                  <span class={cn(
-                    'shrink-0 rounded px-1.5 py-0.5 text-[10px] tabular-nums font-medium',
-                    health === 'ok' ? 'bg-status-ok/15 text-status-ok' :
-                    health === 'warn' ? 'bg-status-warn/15 text-status-warn' :
-                    'bg-muted/60 text-muted-foreground'
-                  )}>
-                    {s.running}/{s.desired}
-                  </span>
-                </button>
+            {#if c.loading}
+              <div class="tui-tree-row is-service" style="color: var(--tui-fg-4); cursor: default;">
+                <Loader2 class="tui-spinner" size={11} />
+                <span>Loading…</span>
+              </div>
+            {/if}
+            {#each c.services ?? [] as s (s.arn)}
+              {@const health = serviceHealth(s)}
+              <button
+                type="button"
+                class="tui-tree-row is-service"
+                onclick={() => toggleService(c, s)}
+              >
+                <span class="tui-tree-chev" class:is-open={s.expanded}>
+                  <ChevronRight size={10} strokeWidth={2} />
+                </span>
+                <span class="tui-tree-name">{s.name}</span>
+                <span class={`tui-tree-count is-${health}`}>{s.running}/{s.desired}</span>
+              </button>
 
-                {#if s.expanded}
-                  <!-- Tasks -->
-                  <div class="ml-4 border-l border-border/30 pb-0.5">
-                    {#if s.loading}
-                      <div class="flex items-center gap-2 py-1.5 pl-3 text-[11px] text-muted-foreground/60">
-                        <Loader2 class="h-3 w-3 animate-spin" /> Loading…
-                      </div>
-                    {/if}
-                    {#each s.tasks ?? [] as t (t.arn)}
-                      {@const isActive = activeTask?.arn === t.arn}
-                      <button
-                        class={cn(
-                          'group flex w-full items-center gap-2 py-1.5 pl-3 pr-2 text-left transition-colors',
-                          isActive
-                            ? 'bg-primary/10 text-foreground'
-                            : 'hover:bg-sidebar-accent/40 text-foreground/70'
-                        )}
-                        onclick={() => selectTask(t)}
-                      >
-                        <span class={cn(
-                          'h-1.5 w-1.5 shrink-0 rounded-full',
-                          t.lastStatus === 'RUNNING'
-                            ? 'bg-status-ok'
-                            : 'bg-muted-foreground/30'
-                        )}></span>
-                        <Hash class="h-2.5 w-2.5 shrink-0 text-muted-foreground/30" />
-                        <span class="truncate font-mono text-[10px]">
-                          {shortId(t.arn).slice(0, 8)}…
-                        </span>
-                        {#if isActive}
-                          <span class="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-primary"></span>
-                        {/if}
-                      </button>
-                    {/each}
+              {#if s.expanded}
+                {#if s.loading}
+                  <div class="tui-tree-row is-task" style="color: var(--tui-fg-4); cursor: default;">
+                    <Loader2 class="tui-spinner" size={10} />
+                    <span>Loading…</span>
                   </div>
                 {/if}
-              {/each}
-            </div>
+                {#each s.tasks ?? [] as t (t.arn)}
+                  {@const isActive = activeTask?.arn === t.arn}
+                  <button
+                    type="button"
+                    class="tui-tree-row is-task"
+                    class:is-active={isActive}
+                    onclick={() => selectTask(t)}
+                  >
+                    <StatusDot
+                      tone={t.lastStatus === 'RUNNING' ? 'ok' : 'muted'}
+                      size={6}
+                    />
+                    <span class="tui-tree-name">{shortId(t.arn).slice(0, 12)}…</span>
+                    {#if isActive}
+                      <span style="color: var(--tui-accent-2);">●</span>
+                    {/if}
+                  </button>
+                {/each}
+              {/if}
+            {/each}
           {/if}
         {/each}
       </div>
     </div>
 
     <!-- Right: task detail + containers + terminal -->
-    <div class="flex min-w-0 flex-1 flex-col overflow-hidden">
+    <div class="tui-split-detail">
       {#if activeTask}
         {@const task = activeTask}
-        <div class="min-h-0 flex-1 overflow-auto">
-          <!-- Task hero -->
-          <div class="border-b border-border/60 px-8 py-6">
-            <div class="flex items-start justify-between gap-4">
-              <div class="min-w-0 flex-1">
-                <div class="flex items-center gap-2">
-                  <span class={cn(
-                    'h-2.5 w-2.5 shrink-0 rounded-full',
-                    task.lastStatus === 'RUNNING'
-                      ? 'bg-status-ok shadow-[0_0_8px_theme(colors.status.ok/50%)]'
-                      : 'bg-muted-foreground/30'
-                  )}></span>
-                  <h1 class="truncate font-mono text-lg font-bold tracking-tight">
-                    {shortId(task.arn)}
-                  </h1>
-                </div>
-                <p class="mt-1.5 text-xs text-muted-foreground/60">
-                  {task.launchType} · {task.cluster}
-                </p>
+        <div class="tui-inst-detail">
+          <div class="tui-inst-hero">
+            <div class="tui-inst-hero-info">
+              <h1 class="tui-inst-hero-title" style="font-family: var(--tui-font-mono); font-size: 18px;">
+                {shortId(task.arn)}
+              </h1>
+              <div class="tui-inst-hero-id">
+                {task.cluster} · {task.launchType}
               </div>
-              <span class={cn(
-                'shrink-0 inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold',
-                task.lastStatus === 'RUNNING'
-                  ? 'border-status-ok/20 bg-status-ok/12 text-status-ok'
-                  : 'border-border bg-muted/50 text-muted-foreground'
-              )}>
-                {task.lastStatus}
-              </span>
             </div>
+            <span class={`tui-pill tui-pill-${task.lastStatus === 'RUNNING' ? 'ok' : 'muted'} tui-pill-md`}>
+              <StatusDot
+                tone={task.lastStatus === 'RUNNING' ? 'ok' : 'muted'}
+                size={6}
+              />
+              {task.lastStatus}
+            </span>
           </div>
 
-          <!-- Containers -->
-          <div class="px-8 py-6">
-            <h3 class="mb-4 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50">
-              Containers ({containers.length})
-            </h3>
+          <div class="tui-inst-section">
+            <div class="tui-section-label">
+              <span class="tui-section-label-text">
+                <Box size={12} strokeWidth={2} />
+                Containers
+                <span class="tui-section-count">{containers.length}</span>
+              </span>
+            </div>
 
             {#if loadingContainers}
-              <div class="flex items-center gap-2.5 text-sm text-muted-foreground/60">
-                <Loader2 class="h-4 w-4 animate-spin" />
+              <div style="display: flex; align-items: center; gap: 10px; color: var(--tui-fg-3); font-size: 12px; padding: 8px 0;">
+                <Loader2 class="tui-spinner" size={14} />
                 Loading containers…
               </div>
             {:else if containers.length === 0}
-              <p class="text-sm text-muted-foreground/50">No containers found.</p>
+              <p style="color: var(--tui-fg-4); font-size: 12px;">No containers found.</p>
             {:else}
-              <div class="space-y-3">
-                {#each containers as c (c.name)}
-                  {@const isExec = termContainer?.container.name === c.name}
-                  <div class={cn(
-                    'rounded-xl border bg-card transition-all',
-                    isExec
-                      ? 'border-primary/30 shadow-[0_0_0_1px_theme(colors.primary/20%)]'
-                      : 'border-border/60 hover:border-border'
-                  )}>
-                    <div class="flex items-center gap-4 p-4">
-                      <!-- Container icon -->
-                      <div class={cn(
-                        'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg',
-                        c.lastStatus === 'RUNNING'
-                          ? 'bg-status-ok/10'
-                          : 'bg-muted/50'
-                      )}>
-                        <Box class={cn(
-                          'h-5 w-5',
-                          c.lastStatus === 'RUNNING'
-                            ? 'text-status-ok'
-                            : 'text-muted-foreground/30'
-                        )} />
-                      </div>
-
-                      <!-- Info -->
-                      <div class="min-w-0 flex-1">
-                        <div class="flex items-center gap-2">
-                          <span class="font-mono text-sm font-semibold">{c.name}</span>
-                          <span class={cn(
-                            'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium',
-                            c.lastStatus === 'RUNNING'
-                              ? 'border-status-ok/20 bg-status-ok/10 text-status-ok'
-                              : 'border-border bg-muted/50 text-muted-foreground'
-                          )}>
-                            <span class={cn(
-                              'h-1 w-1 rounded-full',
-                              c.lastStatus === 'RUNNING' ? 'bg-status-ok' : 'bg-muted-foreground/40'
-                            )}></span>
-                            {c.lastStatus}
-                          </span>
-                          {#if c.health}
-                            <span class={cn(
-                              'rounded-full border px-2 py-0.5 text-[10px] font-medium',
-                              c.health === 'HEALTHY'
-                                ? 'border-status-ok/20 bg-status-ok/10 text-status-ok'
-                                : 'border-status-warn/20 bg-status-warn/10 text-status-warn'
-                            )}>
-                              {c.health}
-                            </span>
-                          {/if}
-                        </div>
-                        <p class="mt-1 truncate font-mono text-[11px] text-muted-foreground/60">
-                          {c.image || 'No image'}
-                        </p>
-                      </div>
-
-                      <!-- Exec button -->
-                      {#if c.lastStatus === 'RUNNING'}
-                        <Button
-                          size="sm"
-                          variant={isExec ? 'secondary' : 'outline'}
-                          onclick={() => execContainer(task, c)}
-                          class="shrink-0 gap-1.5"
-                        >
-                          <PlugZap class="h-3.5 w-3.5" />
-                          {isExec ? 'Active' : 'Exec'}
-                        </Button>
-                      {/if}
+              <div class="tui-container-stack">
+                {#each containers as co (co.name)}
+                  {@const isExec = termContainer?.container.name === co.name}
+                  {@const running = co.lastStatus === 'RUNNING'}
+                  <div class="tui-container-card" class:is-active={isExec}>
+                    <div class="tui-container-card-icon" class:is-running={running}>
+                      <Box size={18} strokeWidth={1.6} />
                     </div>
+                    <div class="tui-container-card-info">
+                      <div class="tui-container-card-row">
+                        <span class="tui-container-card-name">{co.name}</span>
+                        <span class={`tui-pill tui-pill-${running ? 'ok' : 'muted'} tui-pill-sm`}>
+                          <StatusDot tone={running ? 'ok' : 'muted'} size={5} />
+                          {co.lastStatus}
+                        </span>
+                        {#if co.health}
+                          <span class={`tui-pill tui-pill-${co.health === 'HEALTHY' ? 'ok' : 'warn'} tui-pill-sm`}>
+                            {co.health}
+                          </span>
+                        {/if}
+                      </div>
+                      <div class="tui-container-card-image">{co.image || 'No image'}</div>
+                    </div>
+                    {#if running}
+                      <button
+                        type="button"
+                        class={`tui-btn tui-btn-${isExec ? 'outline' : 'default'} tui-btn-sm`}
+                        onclick={() => execContainer(task, co)}
+                      >
+                        <Plug size={12} strokeWidth={1.8} />
+                        {isExec ? 'Active' : 'Exec'}
+                      </button>
+                    {/if}
                   </div>
                 {/each}
               </div>
@@ -380,11 +302,10 @@
           </div>
         </div>
 
-        <!-- ECS exec terminal -->
         {#if termContainer}
           {@const { task: t, container } = termContainer}
           {@const ptyId = `ecs-${shortId(t.arn)}-${container.name}-${termKey}`}
-          <div class="h-72 shrink-0 border-t border-border">
+          <div class="tui-pty-footer">
             <PtyTerminal
               {ptyId}
               title="exec · {container.name} · {shortId(t.arn)}"
@@ -406,17 +327,10 @@
           </div>
         {/if}
       {:else}
-        <!-- Empty state -->
-        <div class="flex flex-1 flex-col items-center justify-center gap-4 text-center">
-          <div class="flex h-16 w-16 items-center justify-center rounded-2xl border border-border/60 bg-card">
-            <Boxes class="h-7 w-7 text-muted-foreground/30" />
-          </div>
-          <div>
-            <p class="text-sm font-semibold text-foreground/70">Select a task</p>
-            <p class="mt-1 text-xs text-muted-foreground/50">
-              Expand a cluster → service → task in the sidebar
-            </p>
-          </div>
+        <div class="tui-empty">
+          <div class="tui-empty-icon"><Boxes size={22} strokeWidth={1.5} /></div>
+          <div class="tui-empty-title">Select a task</div>
+          <div class="tui-empty-sub">Expand a cluster → service → task in the tree on the left.</div>
         </div>
       {/if}
     </div>

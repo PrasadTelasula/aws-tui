@@ -1,18 +1,18 @@
 <script lang="ts">
-  import { tick } from 'svelte';
   import {
     Copy,
     KeyRound,
     Play,
-    PowerOff,
     Square,
-    Terminal as TermIcon
+    Terminal as TermIcon,
+    AlertCircle,
+    LogIn,
+    Shield,
+    Network
   } from 'lucide-svelte';
-  import { Badge, Button } from '$lib/components/ui';
   import StatusDot from '$lib/components/status-dot.svelte';
   import {
     isActive,
-    kindBadgeVariant,
     kindLabel,
     outputLineClass,
     portHint,
@@ -26,7 +26,6 @@
     alias: Alias | null;
     status: SessionStatus | undefined;
     output: string[];
-    /** Re-rendered on each tick so uptime updates. */
     nowTick: number;
     onStart: (a: Alias) => void;
     onStop: (a: Alias) => void;
@@ -69,6 +68,15 @@
     return formatDuration(s.tokenRemainingSecs);
   }
 
+  function kindMeta(k: Alias['kind']): { tone: string; Icon: any; label: string } {
+    switch (k) {
+      case 'sso-login':   return { tone: 'violet', Icon: LogIn,    label: 'SSO' };
+      case 'iam-profile': return { tone: 'cyan',   Icon: Shield,   label: 'IAM' };
+      case 'ssm-session': return { tone: 'amber',  Icon: Network,  label: 'SSM' };
+      default:            return { tone: 'muted',  Icon: TermIcon, label: 'OTH' };
+    }
+  }
+
   let active = $derived(isActive(status));
   let port = $derived(alias ? portHint(alias) : null);
   let uptime = $derived.by(() => {
@@ -76,140 +84,189 @@
     return uptimeFrom(status?.startedAt ?? null);
   });
   let exp = $derived(expiryHint(status));
+  let pillTone = $derived(stateTone(status?.state));
+
+  function classifyOutputLine(line: string): string {
+    return outputLineClass(line);
+  }
 </script>
 
 {#if !alias}
-  <div class="flex h-full items-center justify-center text-sm text-muted-foreground">
-    Select an alias to view details
+  <div class="tui-empty">
+    <div class="tui-empty-icon">
+      <TermIcon size={22} strokeWidth={1.5} />
+    </div>
+    <div class="tui-empty-title">Select an alias</div>
+    <div class="tui-empty-sub">Choose a session from the list to view details, output, and connection info.</div>
   </div>
 {:else}
-  <div class="flex h-full flex-col">
-    <header class="border-b border-border px-5 py-4">
-      <div class="flex items-start justify-between gap-3">
-        <div class="min-w-0">
-          <div class="flex items-center gap-2">
-            <StatusDot tone={stateTone(status?.state)} pulse={status?.state === 'starting'} />
-            <h1 class="truncate font-mono text-lg font-semibold">{alias.name}</h1>
-            <Badge variant={kindBadgeVariant(alias.kind)}>{kindLabel(alias.kind)}</Badge>
-            <Badge variant={stateTone(status?.state)}>{stateLabel(status?.state)}</Badge>
-          </div>
-          {#if alias.group || alias.subgroup}
-            <p class="mt-1 text-xs text-muted-foreground">
-              {alias.group ?? '—'}{alias.subgroup ? ' · ' + alias.subgroup : ''}
-            </p>
-          {/if}
-        </div>
-        <div class="flex shrink-0 items-center gap-1.5">
-          {#if status?.hasCredentials}
-            <Button variant="outline" size="sm" onclick={() => onShowCredentials(alias.name)}>
-              <KeyRound class="h-3.5 w-3.5" /> Credentials
-            </Button>
-          {/if}
-          {#if active}
-            <Button variant="destructive" size="sm" onclick={() => onStop(alias)}>
-              <Square class="h-3.5 w-3.5" /> Stop
-            </Button>
-          {:else}
-            <Button size="sm" onclick={() => onStart(alias)}>
-              <Play class="h-3.5 w-3.5" />
-              {status?.state === 'expired' ? 'Re-login' : 'Start'}
-            </Button>
-          {/if}
-        </div>
-      </div>
-
-      {#if status?.errorMessage}
-        <div class="mt-3 rounded-md border border-status-error/30 bg-status-error/10 px-3 py-2 text-xs text-status-error">
-          {status.errorMessage}
-        </div>
-      {/if}
-    </header>
-
-    <div class="grid grid-cols-2 gap-x-6 gap-y-2 px-5 py-4 text-xs sm:grid-cols-3">
-      {#if active}
-        <div>
-          <div class="text-muted-foreground">Uptime</div>
-          <div class="font-mono">{uptime}</div>
-        </div>
-      {/if}
-      {#if status?.pid}
-        <div>
-          <div class="text-muted-foreground">PID</div>
-          <div class="font-mono">{status.pid}</div>
-        </div>
-      {/if}
-      {#if alias.profile}
-        <div>
-          <div class="text-muted-foreground">Profile</div>
-          <div class="font-mono">{alias.profile}</div>
-        </div>
-      {/if}
-      {#if alias.region}
-        <div>
-          <div class="text-muted-foreground">Region</div>
-          <div class="font-mono">{alias.region}</div>
-        </div>
-      {/if}
-      {#if alias.ssoSessionName}
-        <div>
-          <div class="text-muted-foreground">SSO Session</div>
-          <div class="font-mono">{alias.ssoSessionName}</div>
-        </div>
-      {/if}
-      {#if status?.identityArn}
-        <div class="col-span-full">
-          <div class="text-muted-foreground">Identity</div>
-          <div class="break-all font-mono text-[11px]">{status.identityArn}</div>
-        </div>
-      {/if}
-      {#if exp}
-        <div>
-          <div class="text-muted-foreground">Token</div>
-          <div class={'font-mono ' + (status?.tokenRemainingSecs === 0 ? 'text-status-warn' : '')}>
-            {exp === 'expired' ? 'expired' : 'expires in ' + exp}
-          </div>
-        </div>
-      {/if}
-      {#if alias.target}
-        <div>
-          <div class="text-muted-foreground">Target</div>
-          <div class="break-all font-mono text-[11px]">{alias.target}</div>
-        </div>
-      {/if}
-      {#if port}
-        <div class="col-span-full">
-          <div class="text-muted-foreground">Forwarding</div>
-          <div class="font-mono text-status-info">{port}</div>
-        </div>
+  {@const km = kindMeta(alias.kind)}
+  {@const KindIcon = km.Icon}
+  <div class="tui-detail-header">
+    <div class="tui-detail-eyebrow">
+      <span class={`tui-kind tui-kind-${km.tone}`}>
+        <KindIcon size={10} strokeWidth={2} />
+        {km.label}
+      </span>
+      {#if alias.group || alias.subgroup}
+        <span>·</span>
+        <span class="tui-detail-eyebrow-path">
+          {alias.group ?? '—'}{alias.subgroup ? ' / ' + alias.subgroup : ''}
+        </span>
       {/if}
     </div>
-
-    <div class="border-y border-border bg-muted/30 px-5 py-3">
-      <div class="flex items-center justify-between gap-2">
-        <div class="text-[10px] uppercase tracking-wider text-muted-foreground">Command</div>
-        <button
-          type="button"
-          onclick={() => onCopyCommand(alias.command)}
-          class="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          title="Copy command"
-        >
-          <Copy class="h-3 w-3" /> Copy
-        </button>
-      </div>
-      <pre class="mt-1 overflow-x-auto whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground">{alias.command}</pre>
-    </div>
-
-    <div class="flex min-h-0 flex-1 flex-col">
-      <div class="flex items-center justify-between gap-2 px-5 py-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-        <div class="flex items-center gap-2">
-          <TermIcon class="h-3 w-3" />
-          <span>Output</span>
-          <span class="normal-case text-muted-foreground/60">({output.length} lines)</span>
-        </div>
-        {#if userScrolled}
+    <div class="tui-detail-title-row">
+      <h1 class="tui-detail-title">
+        <span>{alias.name}</span>
+        <span class={`tui-pill tui-pill-${pillTone} tui-pill-md`}>
+          <StatusDot tone={pillTone} size={6} />
+          {stateLabel(status?.state)}
+        </span>
+      </h1>
+      <div class="tui-detail-actions">
+        {#if status?.hasCredentials}
           <button
             type="button"
-            class="text-[10px] normal-case text-primary hover:underline"
+            class="tui-btn tui-btn-outline tui-btn-sm"
+            onclick={() => onShowCredentials(alias.name)}
+          >
+            <KeyRound size={12} strokeWidth={1.8} />
+            Credentials
+          </button>
+        {/if}
+        <button
+          type="button"
+          class="tui-btn tui-btn-ghost tui-btn-sm"
+          title="Copy command"
+          onclick={() => onCopyCommand(alias.command)}
+        >
+          <Copy size={12} strokeWidth={1.8} />
+        </button>
+        {#if active}
+          <button
+            type="button"
+            class="tui-btn tui-btn-destructive tui-btn-sm"
+            onclick={() => onStop(alias)}
+          >
+            <Square size={12} strokeWidth={1.8} />
+            Stop
+          </button>
+        {:else}
+          <button
+            type="button"
+            class="tui-btn tui-btn-default tui-btn-sm"
+            onclick={() => onStart(alias)}
+          >
+            <Play size={12} strokeWidth={1.8} />
+            {status?.state === 'expired' ? 'Re-login' : 'Start'}
+          </button>
+        {/if}
+      </div>
+    </div>
+    {#if status?.errorMessage}
+      <div class="tui-detail-error">
+        <span style="display: inline-flex; flex-shrink: 0; margin-top: 1px;">
+          <AlertCircle size={14} strokeWidth={1.8} />
+        </span>
+        <span>{status.errorMessage}</span>
+      </div>
+    {/if}
+  </div>
+
+  <div class="tui-meta-grid">
+    {#if active}
+      <div class="tui-meta-cell">
+        <span class="tui-meta-label">Uptime</span>
+        <span class="tui-meta-value">{uptime}</span>
+      </div>
+    {/if}
+    {#if status?.pid}
+      <div class="tui-meta-cell">
+        <span class="tui-meta-label">PID</span>
+        <span class="tui-meta-value">{status.pid}</span>
+      </div>
+    {/if}
+    {#if alias.profile}
+      <div class="tui-meta-cell">
+        <span class="tui-meta-label">Profile</span>
+        <span class="tui-meta-value">{alias.profile}</span>
+      </div>
+    {/if}
+    {#if alias.region}
+      <div class="tui-meta-cell">
+        <span class="tui-meta-label">Region</span>
+        <span class="tui-meta-value">{alias.region}</span>
+      </div>
+    {/if}
+    {#if alias.ssoSessionName}
+      <div class="tui-meta-cell">
+        <span class="tui-meta-label">SSO Session</span>
+        <span class="tui-meta-value">{alias.ssoSessionName}</span>
+      </div>
+    {/if}
+    {#if exp}
+      <div class="tui-meta-cell">
+        <span class="tui-meta-label">Token</span>
+        <span class={`tui-meta-value ${status?.tokenRemainingSecs === 0 ? 'is-warn' : ''}`}>
+          {exp === 'expired' ? 'expired' : 'expires in ' + exp}
+        </span>
+      </div>
+    {/if}
+    {#if alias.target}
+      <div class="tui-meta-cell">
+        <span class="tui-meta-label">Target</span>
+        <span class="tui-meta-value">{alias.target}</span>
+      </div>
+    {/if}
+    {#if port}
+      <div class="tui-meta-cell">
+        <span class="tui-meta-label">Forwarding</span>
+        <span class="tui-meta-value is-info">{port}</span>
+      </div>
+    {/if}
+    {#if status?.identityArn}
+      <div class="tui-meta-cell is-wide">
+        <span class="tui-meta-label">Identity</span>
+        <span class="tui-meta-value is-wrap">{status.identityArn}</span>
+      </div>
+    {/if}
+  </div>
+
+  <div class="tui-command-block">
+    <div class="tui-command-block-head">
+      <span class="tui-command-block-label">
+        <TermIcon size={11} strokeWidth={2} />
+        Command
+      </span>
+      <button
+        type="button"
+        class="tui-btn tui-btn-ghost tui-btn-sm"
+        onclick={() => onCopyCommand(alias.command)}
+        title="Copy command"
+      >
+        <Copy size={11} strokeWidth={1.8} />
+        Copy
+      </button>
+    </div>
+    <pre class="tui-command-block-body"><span class="tui-command-block-prompt">$ </span>{alias.command}</pre>
+  </div>
+
+  <div class="tui-output-wrap">
+    <div class="tui-output-head">
+      <div class="tui-output-head-tabs">
+        <strong>Output</strong>
+      </div>
+      <div class="tui-output-head-meta">
+        <span>{output.length} lines</span>
+        {#if active}
+          <span style="display: inline-flex; align-items: center; gap: 5px; color: var(--tui-ok);">
+            <StatusDot tone="ok" pulse size={5} />
+            streaming
+          </span>
+        {:else if userScrolled}
+          <button
+            type="button"
+            class="tui-btn tui-btn-ghost tui-btn-sm"
             onclick={() => {
               userScrolled = false;
               if (outputBox) outputBox.scrollTop = outputBox.scrollHeight;
@@ -219,21 +276,20 @@
           </button>
         {/if}
       </div>
-      <div
-        bind:this={outputBox}
-        onscroll={onOutputScroll}
-        class="min-h-0 flex-1 overflow-auto bg-[#0f1114] px-5 py-3 font-mono text-[11px] leading-relaxed"
-      >
-        {#if output.length === 0}
-          <span class="italic text-muted-foreground">
-            {active ? '(waiting for output…)' : '(no output — start the session to see output here)'}
-          </span>
-        {:else}
-          {#each output as line, i (i)}
-            <div class={'whitespace-pre-wrap ' + outputLineClass(line)}>{line}</div>
-          {/each}
-        {/if}
-      </div>
+    </div>
+    <div bind:this={outputBox} onscroll={onOutputScroll} class="tui-output-body">
+      {#if output.length === 0}
+        <span class="tui-output-empty">
+          {active ? '(waiting for output…)' : '(no output — start the session to see output here)'}
+        </span>
+      {:else}
+        {#each output as line, i (i)}
+          {@const isRecent = active && i === output.length - 1}
+          <div class={`tui-output-line ${classifyOutputLine(line)}`} class:is-recent={isRecent}>
+            {line}
+          </div>
+        {/each}
+      {/if}
     </div>
   </div>
 {/if}

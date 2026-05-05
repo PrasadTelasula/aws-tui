@@ -171,7 +171,7 @@
       {#if selected}
         {@const inst = selected}
         {@const tone = ec2StateTone(inst.state)}
-        <div class="tui-inst-detail">
+        <div class="tui-inst-detail" class:is-compact={termInstance != null}>
           <div class="tui-inst-hero">
             <div class="tui-inst-hero-info">
               <h1 class="tui-inst-hero-title">{inst.name ?? inst.id}</h1>
@@ -290,7 +290,7 @@
         {#if termInstance}
           {@const tinst = termInstance}
           {@const ptyId = `ssm-${tinst.id}-${termKey}`}
-          <div class="tui-pty-footer">
+          <div class="tui-pty-footer is-fullspace">
             <PtyTerminal
               {ptyId}
               title="SSM · {tinst.name ?? tinst.id} · {tinst.id}"

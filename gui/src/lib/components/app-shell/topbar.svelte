@@ -83,13 +83,17 @@
   let profileMenuOpen = $state(false);
   let regionMenuOpen = $state(false);
 
-  // A profile is "active" if any alias bound to it has a live session.
+  // A profile is "active" if any live session resolves to it. Two sources:
+  //   1. The alias's own `profile` (set on iam-profile + ssm-session aliases).
+  //   2. The SessionStatus's `ssoProfile` (the profile an active SSO login
+  //      resolved to — sso-login aliases have `profile: null` themselves).
   let activeProfiles = $derived.by(() => {
     const out = new Set<string>();
     for (const a of $aliases) {
-      if (!a.profile) continue;
       const st = $sessions[a.name];
-      if (st && isActive(st)) out.add(a.profile);
+      if (!st || !isActive(st)) continue;
+      if (a.profile) out.add(a.profile);
+      if (st.ssoProfile) out.add(st.ssoProfile);
     }
     return out;
   });

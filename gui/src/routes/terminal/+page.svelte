@@ -22,17 +22,17 @@
     const { WebLinksAddon } = await import('@xterm/addon-web-links');
 
     term = new Terminal({
-      fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
+      fontFamily: '"Geist Mono Variable", ui-monospace, monospace',
       fontSize: 13,
       lineHeight: 1.5,
       theme: {
-        background: '#07101F',
+        background: '#000000',
         foreground: '#E8EEF6',
         cursor: '#FFAC33',
-        cursorAccent: '#07101F',
+        cursorAccent: '#000000',
         selectionBackground: 'rgba(255, 153, 0, 0.25)',
-        black: '#0A1421',
-        brightBlack: '#5D6A82',
+        black: '#18181B',
+        brightBlack: '#71717A',
         red: '#F26B6B',
         brightRed: '#F58A8A',
         green: '#4ECB71',

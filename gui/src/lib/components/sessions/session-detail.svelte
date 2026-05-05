@@ -5,15 +5,12 @@
     Play,
     Stop as Square,
     TerminalWindow as TermIcon,
-    WarningCircle as AlertCircle,
-    SignIn as LogIn,
-    Shield,
-    TreeStructure as Network
+    WarningCircle as AlertCircle
   } from 'phosphor-svelte';
   import StatusDot from '$lib/components/status-dot.svelte';
   import {
+    aliasMeta,
     isActive,
-    kindLabel,
     outputLineClass,
     portHint,
     stateLabel,
@@ -68,15 +65,6 @@
     return formatDuration(s.tokenRemainingSecs);
   }
 
-  function kindMeta(k: Alias['kind']): { tone: string; Icon: any; label: string } {
-    switch (k) {
-      case 'sso-login':   return { tone: 'violet', Icon: LogIn,    label: 'SSO' };
-      case 'iam-profile': return { tone: 'cyan',   Icon: Shield,   label: 'IAM' };
-      case 'ssm-session': return { tone: 'amber',  Icon: Network,  label: 'SSM' };
-      default:            return { tone: 'muted',  Icon: TermIcon, label: 'OTH' };
-    }
-  }
-
   let active = $derived(isActive(status));
   let port = $derived(alias ? portHint(alias) : null);
   let uptime = $derived.by(() => {
@@ -100,7 +88,7 @@
     <div class="tui-empty-sub">Choose a session from the list to view details, output, and connection info.</div>
   </div>
 {:else}
-  {@const km = kindMeta(alias.kind)}
+  {@const km = aliasMeta(alias)}
   {@const KindIcon = km.Icon}
   <div class="tui-detail-header">
     <div class="tui-detail-eyebrow">

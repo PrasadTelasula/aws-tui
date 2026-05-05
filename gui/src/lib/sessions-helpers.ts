@@ -7,7 +7,15 @@ import {
   HardDrives,
   Shield,
   TerminalWindow,
-  Tag
+  Tag,
+  SignIn,
+  IdentificationCard,
+  MagnifyingGlassPlus,
+  Lightning,
+  Broadcast,
+  Plug,
+  Cloud,
+  Browser
 } from 'phosphor-svelte';
 import type { Alias, SessionState, SessionStatus } from './types';
 
@@ -53,11 +61,69 @@ export function kindLabel(k: Alias['kind']): string {
 
 export function kindIcon(k: Alias['kind']): Component {
   switch (k) {
-    case 'sso-login': return Shield;
-    case 'ssm-session': return TreeStructure;
-    case 'iam-profile': return Key;
+    case 'sso-login': return SignIn;
+    case 'ssm-session': return Plug;
+    case 'iam-profile': return IdentificationCard;
     default: return Tag;
   }
+}
+
+export type KindTone = 'violet' | 'cyan' | 'amber' | 'lime' | 'muted';
+
+export interface AliasMeta {
+  Icon: Component;
+  tone: KindTone;
+  /** 3–6 char tag label, e.g. SSO / DB / SEARCH / SHELL. */
+  label: string;
+}
+
+/**
+ * Pick a meaningful icon and tag for an alias, based on the type of resource
+ * it actually targets (database / search / cache / streaming / shell / port
+ * forward / SSO login / IAM identity), inferred from name + subgroup + host.
+ */
+export function aliasMeta(a: Alias): AliasMeta {
+  if (a.kind === 'sso-login') return { Icon: SignIn, tone: 'violet', label: 'SSO' };
+  if (a.kind === 'iam-profile') return { Icon: IdentificationCard, tone: 'cyan', label: 'IAM' };
+
+  if (a.kind === 'ssm-session') {
+    const haystack = [a.name, a.subgroup, a.ssmHost, a.command]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+
+    // Plain shell / bastion (no port mapping)
+    const isPortFwd = !!a.ssmRemotePort;
+    if (!isPortFwd && /shell|bastion|jumpbox|jump-box|exec/.test(haystack)) {
+      return { Icon: TerminalWindow, tone: 'lime', label: 'SHELL' };
+    }
+
+    if (/\b(rds|postgres|postgres?ql|mysql|mariadb|aurora|sqlserver|oracle|dynamodb?|database|\bdb\b)\b/.test(haystack)) {
+      return { Icon: Database, tone: 'amber', label: 'DB' };
+    }
+    if (/opensearch|elastic(search)?|kibana|\bes\b|\bsearch\b/.test(haystack)) {
+      return { Icon: MagnifyingGlassPlus, tone: 'amber', label: 'SEARCH' };
+    }
+    if (/\bredis\b|memcache(d)?|valkey|\bcache\b/.test(haystack)) {
+      return { Icon: Lightning, tone: 'amber', label: 'CACHE' };
+    }
+    if (/kafka|\bmsk\b|kinesis|stream(ing)?|broker|pubsub/.test(haystack)) {
+      return { Icon: Broadcast, tone: 'lime', label: 'STREAM' };
+    }
+    if (/\bs3\b|bucket|\bsftp\b|\bftp\b/.test(haystack)) {
+      return { Icon: Cloud, tone: 'cyan', label: 'OBJ' };
+    }
+    if (/grafana|kibana|prometheus|admin|console|portal|web/.test(haystack)) {
+      return { Icon: Browser, tone: 'cyan', label: 'WEB' };
+    }
+    if (!isPortFwd) {
+      return { Icon: TerminalWindow, tone: 'lime', label: 'SHELL' };
+    }
+    // Generic SSM port-forward fallback
+    return { Icon: Plug, tone: 'cyan', label: 'PORT' };
+  }
+
+  return { Icon: Tag, tone: 'muted', label: 'OTH' };
 }
 
 export function subgroupIcon(name: string): Component {

@@ -4,7 +4,7 @@
   import { ipc } from '$lib/ipc';
   import type { Alias, SessionStatus } from '$lib/types';
   import { aliases, aliasesPath, sessions, loading } from '$lib/stores/aws';
-  import { groupAliases, isActive, kindLabel, kindIcon } from '$lib/sessions-helpers';
+  import { aliasMeta, groupAliases, isActive } from '$lib/sessions-helpers';
   import type { AliasGroup } from '$lib/sessions-helpers';
   import { flatten } from '$lib/components/sessions/session-list.svelte';
   import SessionDetail from '$lib/components/sessions/session-detail.svelte';
@@ -16,23 +16,11 @@
     ArrowsClockwise as RefreshCw,
     Pulse as Activity,
     Tag,
-    SignIn as LogIn,
-    Shield,
-    TreeStructure as Network,
     MagnifyingGlass as SearchIcon,
     CaretDown as ChevronDown
   } from 'phosphor-svelte';
   import { uptimeFrom } from '$lib/utils';
   import { stateTone, portHint } from '$lib/sessions-helpers';
-
-  function kindMeta(kind: Alias['kind']): { tone: string; Icon: any; label: string } {
-    switch (kind) {
-      case 'sso-login':   return { tone: 'violet', Icon: LogIn,   label: 'SSO' };
-      case 'iam-profile': return { tone: 'cyan',   Icon: Shield,  label: 'IAM' };
-      case 'ssm-session': return { tone: 'amber',  Icon: Network, label: 'SSM' };
-      default:            return { tone: 'muted',  Icon: Tag,     label: 'OTH' };
-    }
-  }
 
   function stateBadge(state: SessionStatus['state'] | undefined): { cls: string; text: string } | null {
     if (!state) return null;
@@ -478,7 +466,7 @@
               {#each sg.aliases as a (a.name)}
                 {@const st = $sessions[a.name]}
                 {@const selected = selectedAlias === a.name}
-                {@const km = kindMeta(a.kind)}
+                {@const km = aliasMeta(a)}
                 {@const KindIcon = km.Icon}
                 {@const badge = stateBadge(st?.state)}
                 {@const tone = stateTone(st?.state)}

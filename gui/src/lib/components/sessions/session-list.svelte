@@ -45,9 +45,10 @@
 </script>
 
 <script lang="ts">
-  import { CaretDown, MagnifyingGlass, SignIn, Shield, TreeStructure, Tag } from 'phosphor-svelte';
+  import { CaretDown, MagnifyingGlass } from 'phosphor-svelte';
   import StatusDot from '$lib/components/status-dot.svelte';
   import {
+    aliasMeta,
     isActive,
     portHint,
     stateTone
@@ -109,16 +110,6 @@
 
   function cssEscape(s: string): string {
     return s.replace(/(["\\])/g, '\\$1');
-  }
-
-  // Map alias kind → kind tag color + icon (used in row leading slot)
-  function kindMeta(kind: Alias['kind']): { tone: string; Icon: any; label: string } {
-    switch (kind) {
-      case 'sso-login':   return { tone: 'violet', Icon: SignIn,         label: 'SSO' };
-      case 'iam-profile': return { tone: 'cyan',   Icon: Shield,         label: 'IAM' };
-      case 'ssm-session': return { tone: 'amber',  Icon: TreeStructure,  label: 'SSM' };
-      default:            return { tone: 'muted',  Icon: Tag,      label: 'OTH' };
-    }
   }
 
   function stateBadgeClass(state: SessionStatus['state'] | undefined): string | null {
@@ -197,7 +188,7 @@
         {@const st = sessions[a.name]}
         {@const tone = stateTone(st?.state)}
         {@const selected = selectedAlias === a.name}
-        {@const km = kindMeta(a.kind)}
+        {@const km = aliasMeta(a)}
         {@const KindIcon = km.Icon}
         {@const badgeClass = stateBadgeClass(st?.state)}
         {@const badgeText = stateBadgeText(st?.state)}

@@ -87,9 +87,21 @@
       term.writeln(`\x1b[1;31m${error}\x1b[0m`);
     }
 
-    const onResize = () => fit?.fit();
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    const refit = () => {
+      try { fit?.fit(); } catch { /* not measured yet */ }
+    };
+    window.addEventListener('resize', refit);
+
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && container) {
+      ro = new ResizeObserver(() => refit());
+      ro.observe(container);
+    }
+
+    return () => {
+      window.removeEventListener('resize', refit);
+      ro?.disconnect();
+    };
   });
 
   onDestroy(() => {

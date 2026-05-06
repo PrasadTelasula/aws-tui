@@ -86,9 +86,25 @@
       term.writeln(`\x1b[1;31m${String(e)}\x1b[0m`);
     }
 
-    const onWindowResize = () => fit?.fit();
-    window.addEventListener('resize', onWindowResize);
-    return () => window.removeEventListener('resize', onWindowResize);
+    const refit = () => {
+      try { fit?.fit(); } catch { /* element not measured yet */ }
+    };
+
+    // Window resize (whole app)
+    window.addEventListener('resize', refit);
+
+    // Container resize — fires when CSS layout changes the parent's size
+    // (e.g. is-compact ↔ is-fullspace toggles, sidebar collapse, etc.).
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && container) {
+      ro = new ResizeObserver(() => refit());
+      ro.observe(container);
+    }
+
+    return () => {
+      window.removeEventListener('resize', refit);
+      ro?.disconnect();
+    };
   });
 
   onDestroy(() => {

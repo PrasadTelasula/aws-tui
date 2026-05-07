@@ -93,45 +93,45 @@
   }
 
   .dark {
-    /* ---------------- Color tokens — dark ---------------- */
-    --background: 222 22% 8%;
-    --foreground: 220 14% 92%;
+    /* ---------------- Color tokens — dark (zinc) ---------------- */
+    --background: 240 10% 4%;          /* #09090b — zinc-950 */
+    --foreground: 0 0% 98%;            /* #fafafa */
 
-    --card: 222 20% 11%;
-    --card-foreground: 220 14% 92%;
+    --card: 240 4% 9%;                 /* between zinc-950 and zinc-900 */
+    --card-foreground: 0 0% 98%;
 
-    --popover: 222 20% 11%;
-    --popover-foreground: 220 14% 92%;
+    --popover: 240 4% 9%;
+    --popover-foreground: 0 0% 98%;
 
-    --primary: 28 92% 56%;
-    --primary-foreground: 222 20% 8%;
+    --primary: 33 100% 50%;            /* AWS amber #ff9900 */
+    --primary-foreground: 24 100% 5%;  /* near-black */
 
-    --secondary: 222 16% 16%;
-    --secondary-foreground: 220 14% 92%;
+    --secondary: 240 4% 16%;           /* #27272a — zinc-800 */
+    --secondary-foreground: 0 0% 98%;
 
-    --muted: 222 16% 16%;
-    --muted-foreground: 220 9% 64%;
+    --muted: 240 4% 16%;
+    --muted-foreground: 240 5% 70%;    /* zinc-300/400 — readable */
 
-    --accent: 222 16% 16%;
-    --accent-foreground: 220 14% 92%;
+    --accent: 240 4% 16%;
+    --accent-foreground: 0 0% 98%;
 
-    --destructive: 0 62% 48%;
-    --destructive-foreground: 0 0% 100%;
+    --destructive: 0 80% 70%;          /* matches tui --tui-err #f87171 */
+    --destructive-foreground: 0 0% 98%;
 
-    --border: 222 16% 18%;
-    --input: 222 16% 18%;
-    --ring: 28 92% 56%;
+    --border: 240 4% 16%;
+    --input: 240 4% 16%;
+    --ring: 33 100% 50%;
 
-    --sidebar-background: 222 24% 7%;
-    --sidebar-foreground: 220 14% 88%;
-    --sidebar-border: 222 16% 16%;
-    --sidebar-accent: 222 20% 13%;
-    --sidebar-accent-foreground: 220 14% 96%;
+    --sidebar-background: 0 0% 0%;     /* pure black — matches tui --tui-bg */
+    --sidebar-foreground: 0 0% 98%;
+    --sidebar-border: 240 4% 16%;
+    --sidebar-accent: 240 4% 12%;
+    --sidebar-accent-foreground: 0 0% 98%;
 
-    --status-ok: 142 65% 48%;
-    --status-warn: 38 92% 56%;
-    --status-error: 0 72% 58%;
-    --status-info: 217 91% 65%;
+    --status-ok: 142 71% 60%;          /* #4ade80 — green-400 */
+    --status-warn: 40 96% 60%;         /* #fbbf24 — amber-400 */
+    --status-error: 0 80% 70%;         /* #f87171 — red-400 */
+    --status-info: 215 90% 67%;        /* #60a5fa — blue-400 */
   }
 
   * {

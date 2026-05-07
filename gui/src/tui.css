@@ -24,37 +24,40 @@
   --tui-bg-2:     #18181B;          /* cards / raised (zinc-900) */
   --tui-bg-3:     #27272A;          /* hover (zinc-800) */
   --tui-bg-4:     #3F3F46;          /* selected (zinc-700) */
-  --tui-line:     #1F1F23;          /* subtle border on near-black */
-  --tui-line-2:   #27272A;
-  --tui-line-3:   #3F3F46;
+  --tui-line:     #27272A;          /* zinc-800 — visible against zinc-900 */
+  --tui-line-2:   #3F3F46;          /* zinc-700 */
+  --tui-line-3:   #52525B;          /* zinc-600 */
 
-  --tui-fg:       #FAFAFA;          /* zinc-50 */
-  --tui-fg-2:     #D4D4D8;          /* zinc-300 */
-  --tui-fg-3:     #A1A1AA;          /* zinc-400 */
-  --tui-fg-4:     #71717A;          /* zinc-500 */
+  --tui-fg:       #FAFAFA;          /* zinc-50  — primary text */
+  --tui-fg-2:     #E4E4E7;          /* zinc-200 — secondary text */
+  --tui-fg-3:     #D4D4D8;          /* zinc-300 — muted but still readable */
+  --tui-fg-4:     #A1A1AA;          /* zinc-400 — hints, eyebrows */
 
   --tui-accent:       #FF9900;
   --tui-accent-2:     #FFAC33;
-  --tui-accent-soft:  rgba(255, 153, 0, 0.12);
-  --tui-accent-line:  rgba(255, 153, 0, 0.32);
+  --tui-accent-soft:  rgba(255, 153, 0, 0.14);
+  --tui-accent-line:  rgba(255, 153, 0, 0.36);
 
-  --tui-ok:        #4ECB71;
-  --tui-ok-soft:   rgba(78, 203, 113, 0.13);
-  --tui-warn:      #F2B544;
-  --tui-warn-soft: rgba(242, 181, 68, 0.13);
-  --tui-err:       #F26B6B;
-  --tui-err-soft:  rgba(242, 107, 107, 0.13);
-  --tui-info:      #5AA9FF;
-  --tui-info-soft: rgba(90, 169, 255, 0.13);
+  /* Status — brighter Tailwind 400-tier values for high contrast on
+     near-black backgrounds. */
+  --tui-ok:        #4ADE80;          /* green-400 */
+  --tui-ok-soft:   rgba(74, 222, 128, 0.14);
+  --tui-warn:      #FBBF24;          /* amber-400 */
+  --tui-warn-soft: rgba(251, 191, 36, 0.14);
+  --tui-err:       #F87171;          /* red-400 */
+  --tui-err-soft:  rgba(248, 113, 113, 0.14);
+  --tui-info:      #60A5FA;          /* blue-400 */
+  --tui-info-soft: rgba(96, 165, 250, 0.14);
 
-  --tui-violet:      #B07BFF;
-  --tui-violet-soft: rgba(176, 123, 255, 0.13);
-  --tui-cyan:        #5BD0E0;
-  --tui-cyan-soft:   rgba(91, 208, 224, 0.13);
-  --tui-amber:       #F4B23A;
-  --tui-amber-soft:  rgba(244, 178, 58, 0.13);
-  --tui-lime:        #A6D454;
-  --tui-lime-soft:   rgba(166, 212, 84, 0.13);
+  /* Kind tag tones — Tailwind 300/400 tier so they read well on dark. */
+  --tui-violet:      #C084FC;        /* purple-400 */
+  --tui-violet-soft: rgba(192, 132, 252, 0.14);
+  --tui-cyan:        #67E8F9;        /* cyan-300 */
+  --tui-cyan-soft:   rgba(103, 232, 249, 0.14);
+  --tui-amber:       #FBBF24;
+  --tui-amber-soft:  rgba(251, 191, 36, 0.14);
+  --tui-lime:        #BEF264;        /* lime-300 */
+  --tui-lime-soft:   rgba(190, 242, 100, 0.14);
 
   --tui-sidebar-w: 220px;
   --tui-sidebar-w-collapsed: 56px;
@@ -780,11 +783,11 @@ body {
 }
 .tui-pill-sm { font-size: 10.5px; padding: 1px 8px 1px 7px; height: 20px; }
 .tui-pill-md { font-size: 11.5px; padding: 2px 10px 2px 8px; height: 24px; }
-.tui-pill-ok    { background: var(--tui-ok-soft);   color: var(--tui-ok);    border-color: rgba(78,203,113,0.25); }
-.tui-pill-warn  { background: var(--tui-warn-soft); color: var(--tui-warn);  border-color: rgba(242,181,68,0.28); }
-.tui-pill-error { background: var(--tui-err-soft);  color: var(--tui-err);   border-color: rgba(242,107,107,0.28); }
-.tui-pill-info  { background: var(--tui-info-soft); color: var(--tui-info);  border-color: rgba(90,169,255,0.28); }
-.tui-pill-muted { background: var(--tui-bg-3);      color: var(--tui-fg-3);  border-color: var(--tui-line-2); }
+.tui-pill-ok    { background: var(--tui-ok-soft);   color: var(--tui-ok);    border-color: rgba(74,222,128,0.30); }
+.tui-pill-warn  { background: var(--tui-warn-soft); color: var(--tui-warn);  border-color: rgba(251,191,36,0.32); }
+.tui-pill-error { background: var(--tui-err-soft);  color: var(--tui-err);   border-color: rgba(248,113,113,0.32); }
+.tui-pill-info  { background: var(--tui-info-soft); color: var(--tui-info);  border-color: rgba(96,165,250,0.32); }
+.tui-pill-muted { background: var(--tui-bg-3);      color: var(--tui-fg-2);  border-color: var(--tui-line-2); }
 
 /* ───── Kind tags ───── */
 .tui-kind {
@@ -799,11 +802,11 @@ body {
   border-radius: 3px;
   border: 1px solid;
 }
-.tui-kind-violet { background: var(--tui-violet-soft); color: var(--tui-violet); border-color: rgba(176,123,255,0.22); }
-.tui-kind-cyan   { background: var(--tui-cyan-soft);   color: var(--tui-cyan);   border-color: rgba(91,208,224,0.22); }
-.tui-kind-amber  { background: var(--tui-amber-soft);  color: var(--tui-amber);  border-color: rgba(244,178,58,0.22); }
-.tui-kind-lime   { background: var(--tui-lime-soft);   color: var(--tui-lime);   border-color: rgba(166,212,84,0.22); }
-.tui-kind-muted  { background: var(--tui-bg-3);        color: var(--tui-fg-3);   border-color: var(--tui-line-2); }
+.tui-kind-violet { background: var(--tui-violet-soft); color: var(--tui-violet); border-color: rgba(192,132,252,0.30); }
+.tui-kind-cyan   { background: var(--tui-cyan-soft);   color: var(--tui-cyan);   border-color: rgba(103,232,249,0.30); }
+.tui-kind-amber  { background: var(--tui-amber-soft);  color: var(--tui-amber);  border-color: rgba(251,191,36,0.30); }
+.tui-kind-lime   { background: var(--tui-lime-soft);   color: var(--tui-lime);   border-color: rgba(190,242,100,0.30); }
+.tui-kind-muted  { background: var(--tui-bg-3);        color: var(--tui-fg-2);   border-color: var(--tui-line-2); }
 .tui-kind-compact {
   width: 22px; height: 22px;
   padding: 0;
@@ -877,9 +880,9 @@ body {
   color: var(--tui-fg-2);
 }
 .tui-stat strong { color: var(--tui-fg); font-weight: 600; }
-.tui-stat-ok    { background: var(--tui-ok-soft);   color: var(--tui-ok);   border-color: rgba(78,203,113,0.22); }
-.tui-stat-warn  { background: var(--tui-warn-soft); color: var(--tui-warn); border-color: rgba(242,181,68,0.22); }
-.tui-stat-error { background: var(--tui-err-soft);  color: var(--tui-err);  border-color: rgba(242,107,107,0.22); }
+.tui-stat-ok    { background: var(--tui-ok-soft);   color: var(--tui-ok);   border-color: rgba(74,222,128,0.30); }
+.tui-stat-warn  { background: var(--tui-warn-soft); color: var(--tui-warn); border-color: rgba(251,191,36,0.30); }
+.tui-stat-error { background: var(--tui-err-soft);  color: var(--tui-err);  border-color: rgba(248,113,113,0.30); }
 
 .tui-toolbar-spacer { flex: 1; }
 .tui-toolbar-shortcut-hint {
@@ -1398,17 +1401,17 @@ body {
 .tui-output-line {
   white-space: pre-wrap;
   word-break: break-word;
-  color: #B0BCD0;
+  color: #D4D4D8;                    /* zinc-300 — base output text */
 }
-.tui-output-line-info    { color: #87B5E8; }
-.tui-output-line-success { color: #6FD58E; }
-.tui-output-line-warn    { color: #F2B544; }
-.tui-output-line-error   { color: #F26B6B; }
-.tui-output-line-log     { color: #8090A8; }
-.tui-output-line.is-recent { color: #E8EEF6; }
+.tui-output-line-info    { color: #93C5FD; } /* sky-300 */
+.tui-output-line-success { color: #86EFAC; } /* green-300 */
+.tui-output-line-warn    { color: #FCD34D; } /* amber-300 */
+.tui-output-line-error   { color: #FCA5A5; } /* red-300 */
+.tui-output-line-log     { color: #A1A1AA; } /* zinc-400 — was barely readable */
+.tui-output-line.is-recent { color: #FAFAFA; }
 .tui-output-empty {
   font-style: italic;
-  color: #6B7C95;
+  color: #A1A1AA;
   font-family: var(--tui-font-term);
   font-size: 12px;
 }

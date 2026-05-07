@@ -1907,8 +1907,18 @@ body {
 }
 .tui-inst-detail.is-compact {
   flex: 0 0 auto;
-  max-height: 130px;
+  max-height: 72px;          /* hero only — terminal claims the rest */
   overflow-y: auto;
+}
+/* User clicked "Details" — show Network + Tags too. Still capped well
+   under the previous 220px so terminal stays the dominant region. */
+.tui-inst-detail.is-compact.is-expanded {
+  max-height: 200px;
+}
+/* Sections (Network, Tags) are hidden in strip mode and revealed only
+   when expanded. */
+.tui-inst-detail.is-compact:not(.is-expanded) .tui-inst-section {
+  display: none;
 }
 .tui-inst-detail.is-compact .tui-inst-hero {
   padding: 8px 14px 4px;

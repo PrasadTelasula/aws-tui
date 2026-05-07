@@ -18,12 +18,17 @@
     Tag,
     CircleNotch as Loader2,
     Plug,
-    X
+    X,
+    CaretDown,
+    CaretUp
   } from 'phosphor-svelte';
 
   let filter = $state('');
   let selected = $state<Instance | null>(null);
   let copiedIp = $state<string | null>(null);
+  /** When at least one SSM tab is open, the info panel collapses to a
+   *  one-row hero strip. The user can expand it to see Network + Tags. */
+  let detailsExpanded = $state(false);
 
   /** Open SSM tabs — multiple instances can be connected at once. The
    *  PTYs stay mounted in a stack; only the active one is visible. */
@@ -195,7 +200,7 @@
       {#if selected}
         {@const inst = selected}
         {@const tone = ec2StateTone(inst.state)}
-        <div class="tui-inst-detail" class:is-compact={terms.length > 0}>
+        <div class="tui-inst-detail" class:is-compact={terms.length > 0} class:is-expanded={detailsExpanded}>
           <div class="tui-inst-hero">
             <div class="tui-inst-hero-info">
               <h1 class="tui-inst-hero-title">{inst.name ?? inst.id}</h1>
@@ -234,6 +239,22 @@
                 >
                   <Plug size={14} weight="regular" />
                   {alreadyOpen ? 'Switch to SSM' : 'Connect via SSM'}
+                </button>
+              {/if}
+              {#if terms.length > 0}
+                <button
+                  type="button"
+                  class="tui-btn tui-btn-ghost tui-btn-sm"
+                  onclick={() => (detailsExpanded = !detailsExpanded)}
+                  title={detailsExpanded ? 'Hide network and tags' : 'Show network and tags'}
+                >
+                  {#if detailsExpanded}
+                    <CaretUp size={11} weight="bold" />
+                    Hide
+                  {:else}
+                    <CaretDown size={11} weight="bold" />
+                    Details
+                  {/if}
                 </button>
               {/if}
             </div>

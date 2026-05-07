@@ -17,19 +17,25 @@
     Globe,
     Tag,
     CircleNotch as Loader2,
-    Plug
+    Plug,
+    X
   } from 'phosphor-svelte';
 
   let filter = $state('');
   let selected = $state<Instance | null>(null);
-  let termInstance = $state<Instance | null>(null);
-  let termKey = $state(0);
   let copiedIp = $state<string | null>(null);
+
+  /** Open SSM tabs — multiple instances can be connected at once. The
+   *  PTYs stay mounted in a stack; only the active one is visible. */
+  type SsmTab = { id: string; instance: Instance };
+  let terms = $state<SsmTab[]>([]);
+  let activeTermId = $state<string | null>(null);
 
   async function refresh() {
     loading.update((l) => ({ ...l, instances: true }));
     selected = null;
-    termInstance = null;
+    // Don't drop active terminals on refresh — they're independent of the
+    // instance list. The user can close each tab manually.
     try {
       instances.set(await ipc.listInstances(get(profile), get(region)));
     } finally {
@@ -40,8 +46,26 @@
   onMount(refresh);
 
   function connectSsm(inst: Instance) {
-    termInstance = inst;
-    termKey += 1;
+    // If a tab for this instance already exists, just switch to it.
+    const existing = terms.find((t) => t.instance.id === inst.id);
+    if (existing) {
+      activeTermId = existing.id;
+      return;
+    }
+    const id = `ssm-${inst.id}-${Date.now()}`;
+    terms = [...terms, { id, instance: inst }];
+    activeTermId = id;
+  }
+
+  function closeTerm(id: string) {
+    const idx = terms.findIndex((t) => t.id === id);
+    if (idx === -1) return;
+    const next = terms.filter((t) => t.id !== id);
+    terms = next;
+    if (activeTermId === id) {
+      // Prefer the tab to the right; fall back to the left; null when empty.
+      activeTermId = next[idx]?.id ?? next[idx - 1]?.id ?? next[0]?.id ?? null;
+    }
   }
 
   function ec2StateTone(state: string): 'ok' | 'warn' | 'error' | 'muted' {
@@ -171,7 +195,7 @@
       {#if selected}
         {@const inst = selected}
         {@const tone = ec2StateTone(inst.state)}
-        <div class="tui-inst-detail" class:is-compact={termInstance != null}>
+        <div class="tui-inst-detail" class:is-compact={terms.length > 0}>
           <div class="tui-inst-hero">
             <div class="tui-inst-hero-info">
               <h1 class="tui-inst-hero-title">{inst.name ?? inst.id}</h1>
@@ -201,13 +225,15 @@
                 {inst.state}
               </span>
               {#if inst.state === 'running'}
+                {@const alreadyOpen = terms.some((t) => t.instance.id === inst.id)}
                 <button
                   type="button"
-                  class="tui-btn tui-btn-default tui-btn-md"
+                  class={`tui-btn ${alreadyOpen ? 'tui-btn-outline' : 'tui-btn-default'} tui-btn-md`}
                   onclick={() => connectSsm(inst)}
+                  title={alreadyOpen ? 'Switch to existing SSM tab' : 'Open a new SSM session'}
                 >
                   <Plug size={14} weight="regular" />
-                  Connect via SSM
+                  {alreadyOpen ? 'Switch to SSM' : 'Connect via SSM'}
                 </button>
               {/if}
             </div>
@@ -287,18 +313,50 @@
           {/if}
         </div>
 
-        {#if termInstance}
-          {@const tinst = termInstance}
-          {@const ptyId = `ssm-${tinst.id}-${termKey}`}
+        {#if terms.length > 0}
           <div class="tui-pty-footer is-fullspace">
-            <PtyTerminal
-              {ptyId}
-              title="SSM · {tinst.name ?? tinst.id} · {tinst.id}"
-              onReady={async (rows, cols) => {
-                await ipc.ptyOpenSsm(ptyId, tinst.id, get(profile), get(region), rows, cols);
-              }}
-              onClose={() => (termInstance = null)}
-            />
+            <!-- Tab strip — one entry per open SSM session -->
+            <div class="tui-pty-tabs" role="tablist">
+              {#each terms as t (t.id)}
+                <div
+                  role="tab"
+                  aria-selected={t.id === activeTermId}
+                  class="tui-pty-tab"
+                  class:is-active={t.id === activeTermId}
+                  onclick={() => (activeTermId = t.id)}
+                  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activeTermId = t.id; } }}
+                  tabindex="0"
+                >
+                  <Plug size={11} weight={t.id === activeTermId ? 'bold' : 'regular'} />
+                  <span class="tui-pty-tab-label">{t.instance.name ?? t.instance.id}</span>
+                  <button
+                    type="button"
+                    class="tui-pty-tab-close"
+                    title="Close terminal"
+                    onclick={(e) => { e.stopPropagation(); closeTerm(t.id); }}
+                  >
+                    <X size={10} weight="bold" />
+                  </button>
+                </div>
+              {/each}
+            </div>
+            <!-- Stacked PTYs — only the active one is visible, but every
+                 PTY stays mounted so its session/scrollback persists. -->
+            <div class="tui-pty-stack">
+              {#each terms as t (t.id)}
+                {@const tinst = t.instance}
+                <div class="tui-pty-stack-item" class:is-visible={t.id === activeTermId} aria-hidden={t.id !== activeTermId}>
+                  <PtyTerminal
+                    ptyId={t.id}
+                    title="SSM · {tinst.name ?? tinst.id} · {tinst.id}"
+                    onReady={async (rows, cols) => {
+                      await ipc.ptyOpenSsm(t.id, tinst.id, get(profile), get(region), rows, cols);
+                    }}
+                    onClose={() => closeTerm(t.id)}
+                  />
+                </div>
+              {/each}
+            </div>
           </div>
         {/if}
       {:else}

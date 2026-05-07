@@ -190,6 +190,12 @@ pub fn resolve_path(explicit: Option<&str>) -> Option<PathBuf> {
         }
     }
     if let Some(home) = dirs::home_dir() {
+        // The dedicated aws-tui config file takes priority — this is what
+        // the in-app Settings editor writes to by default.
+        let aws_tui = home.join(".aws_tui_config");
+        if aws_tui.is_file() {
+            return Some(aws_tui);
+        }
         for name in [".zsh_aliases", ".bash_aliases", ".aliases"] {
             let pb = home.join(name);
             if pb.is_file() {
@@ -220,4 +226,36 @@ pub fn read_aliases_at(path: &Path) -> Result<Vec<Alias>, String> {
     let content = fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
     Ok(parse(&content))
+}
+
+/// Serialize aliases back to the shell-alias file format that `parse` accepts.
+/// Emits `# group: X type: Y` directives whenever the group/subgroup pair
+/// changes from the previous alias, matching the parser's section model.
+pub fn serialize(aliases: &[Alias]) -> String {
+    let mut out = String::new();
+    out.push_str("# Managed by aws-tui — edits made in the Settings page are\n");
+    out.push_str("# written back here. Manual edits are also fine; the file is\n");
+    out.push_str("# parsed on load.\n\n");
+
+    let mut last: (Option<&str>, Option<&str>) = (None, None);
+    for a in aliases {
+        let cur = (a.group.as_deref(), a.subgroup.as_deref());
+        if cur != last {
+            if cur.0.is_some() || cur.1.is_some() {
+                out.push('\n');
+                match cur {
+                    (Some(g), Some(s)) => out.push_str(&format!("# group: {g} type: {s}\n")),
+                    (Some(g), None) => out.push_str(&format!("# group: {g}\n")),
+                    (None, Some(s)) => out.push_str(&format!("# group: misc type: {s}\n")),
+                    (None, None) => {}
+                }
+            }
+            last = cur;
+        }
+        // Single-quote the command. Escape any embedded single quotes by
+        // ending the quote, inserting an escaped quote, and reopening.
+        let cmd = a.command.replace('\'', "'\\''");
+        out.push_str(&format!("alias {}='{}'\n", a.name, cmd));
+    }
+    out
 }

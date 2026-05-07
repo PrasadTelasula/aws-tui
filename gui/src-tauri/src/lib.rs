@@ -27,6 +27,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::list_aliases,
             commands::set_aliases_path,
+            commands::save_aliases,
             commands::get_config,
             commands::list_instances,
             commands::describe_instance,

@@ -94,6 +94,51 @@ pub async fn set_aliases_path(
     })
 }
 
+/// Persist a list of aliases to disk in the shell-alias format the parser
+/// understands. If `path` is None, falls back to the currently-loaded path,
+/// or to ~/.aws_tui_config when nothing is loaded yet (creating the file).
+#[tauri::command]
+pub async fn save_aliases(
+    path: Option<String>,
+    aliases: Vec<Alias>,
+    state: State<'_, AppState>,
+) -> Result<AliasesResponse, String> {
+    use std::path::PathBuf;
+
+    let resolved: PathBuf = match path
+        .or_else(|| state.config.lock().unwrap().aliases_path.clone())
+    {
+        Some(p) => PathBuf::from(p),
+        None => dirs::home_dir()
+            .ok_or_else(|| "no home directory".to_string())?
+            .join(".aws_tui_config"),
+    };
+
+    if let Some(parent) = resolved.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create parent dir: {e}"))?;
+    }
+
+    let content = parser::serialize(&aliases);
+    std::fs::write(&resolved, content)
+        .map_err(|e| format!("write {}: {}", resolved.display(), e))?;
+
+    {
+        let mut cfg = state.config.lock().unwrap();
+        cfg.aliases_path = Some(resolved.to_string_lossy().into_owned());
+        let snapshot = cfg.clone();
+        drop(cfg);
+        config::save(&snapshot)?;
+    }
+
+    // Re-read so the response reflects exactly what's on disk now.
+    let reloaded = parser::read_aliases_at(&resolved)?;
+    Ok(AliasesResponse {
+        path: resolved.to_string_lossy().into_owned(),
+        aliases: reloaded,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // EC2
 // ---------------------------------------------------------------------------

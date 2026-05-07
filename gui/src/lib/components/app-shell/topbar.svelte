@@ -28,7 +28,8 @@
     '/':           { icon: Pulse,          label: 'Sessions' },
     '/instances':  { icon: HardDrives,     label: 'Instances' },
     '/containers': { icon: Stack,          label: 'Containers' },
-    '/terminal':   { icon: TerminalWindow, label: 'Terminal' }
+    '/terminal':   { icon: TerminalWindow, label: 'Terminal' },
+    '/settings':   { icon: GearSix,        label: 'Settings' }
   };
 
   let current = $derived.by(() => {

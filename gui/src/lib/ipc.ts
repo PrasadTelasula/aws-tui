@@ -34,6 +34,8 @@ export const ipc = {
   // -------- aliases / config --------
   listAliases: (path?: string) => invoke<AliasesResponse>('list_aliases', { path }),
   setAliasesPath: (path: string) => invoke<AliasesResponse>('set_aliases_path', { path }),
+  saveAliases: (path: string | null, aliases: Alias[]) =>
+    invoke<AliasesResponse>('save_aliases', { path, aliases }),
   getConfig: () => invoke<AppConfig>('get_config'),
 
   // -------- sessions --------

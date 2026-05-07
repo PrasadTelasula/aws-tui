@@ -8,7 +8,8 @@
     HardDrives,
     Stack,
     TerminalWindow,
-    SidebarSimple
+    SidebarSimple,
+    GearSix
   } from 'phosphor-svelte';
   import StatusDot from '$lib/components/status-dot.svelte';
 
@@ -16,7 +17,8 @@
     { href: '/',           label: 'Sessions',   icon: Pulse,          shortcut: 'g s' },
     { href: '/instances',  label: 'Instances',  icon: HardDrives,     shortcut: 'g i' },
     { href: '/containers', label: 'Containers', icon: Stack,          shortcut: 'g c' },
-    { href: '/terminal',   label: 'Terminal',   icon: TerminalWindow, shortcut: 'g t' }
+    { href: '/terminal',   label: 'Terminal',   icon: TerminalWindow, shortcut: 'g t' },
+    { href: '/settings',   label: 'Settings',   icon: GearSix,        shortcut: 'g ,' }
   ];
 
   function isCurrent(href: string): boolean {

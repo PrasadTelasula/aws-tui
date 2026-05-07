@@ -2075,6 +2075,130 @@ body {
 }
 
 /* ───── Settings page ───── */
+.tui-settings-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 14px 0;
+  border-bottom: 1px solid var(--tui-line);
+  background: var(--tui-bg-1);
+  flex-shrink: 0;
+}
+.tui-settings-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  color: var(--tui-fg-3);
+  font-family: var(--tui-font-sans);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: color 0.08s, border-color 0.08s;
+}
+.tui-settings-tab:hover {
+  color: var(--tui-fg-2);
+}
+.tui-settings-tab.is-active {
+  color: var(--tui-fg);
+  border-bottom-color: var(--tui-accent);
+  font-weight: 600;
+}
+
+/* ───── AWS profile cards (Settings → AWS Profiles) ───── */
+.tui-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+}
+.tui-profile-card {
+  border: 1px solid var(--tui-line);
+  border-radius: var(--tui-r-md);
+  background: var(--tui-bg-2);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.tui-profile-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.tui-profile-card-icon {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--tui-r-sm);
+  background: var(--tui-bg-3);
+  color: var(--tui-fg-2);
+  flex-shrink: 0;
+}
+.tui-profile-card-name {
+  font-family: var(--tui-font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tui-fg);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tui-profile-card-source {
+  font-family: var(--tui-font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  color: var(--tui-fg-4);
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--tui-bg-3);
+  border: 1px solid var(--tui-line);
+  flex-shrink: 0;
+}
+.tui-profile-card-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+}
+.tui-profile-card-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11.5px;
+  min-width: 0;
+}
+.tui-profile-card-row dt {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--tui-fg-4);
+  margin: 0;
+}
+.tui-profile-card-row dd {
+  margin: 0;
+  font-family: var(--tui-font-mono);
+  color: var(--tui-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.tui-profile-card-empty {
+  font-size: 11px;
+  color: var(--tui-fg-4);
+  font-style: italic;
+}
+
 .tui-settings-body {
   flex: 1;
   min-height: 0;

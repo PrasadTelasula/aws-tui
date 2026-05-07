@@ -1,9 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { ipc } from '$lib/ipc';
-  import { aliases as aliasesStore, aliasesPath } from '$lib/stores/aws';
+  import {
+    aliases as aliasesStore,
+    aliasesPath,
+    awsProfiles,
+    awsConfigPath
+  } from '$lib/stores/aws';
   import { aliasMeta } from '$lib/sessions-helpers';
-  import type { Alias, AliasKind } from '$lib/types';
+  import type { Alias, AliasKind, AwsProfile } from '$lib/types';
   import {
     GearSix,
     FolderOpen,
@@ -14,8 +19,20 @@
     ArrowCounterClockwise,
     X,
     Check,
-    WarningCircle
+    WarningCircle,
+    SignIn,
+    IdentificationCard,
+    Tag as TagIcon,
+    ArrowsClockwise
   } from 'phosphor-svelte';
+
+  // ─── Sub-nav ─────────────────────────────────────────────────────
+  type Tab = 'aliases' | 'profiles';
+  let activeTab = $state<Tab>('aliases');
+  const TABS: Array<{ id: Tab; label: string; Icon: any }> = [
+    { id: 'aliases',  label: 'Aliases',      Icon: TagIcon },
+    { id: 'profiles', label: 'AWS Profiles', Icon: IdentificationCard }
+  ];
 
   /** Editable copy of the loaded aliases. */
   let working = $state<Alias[]>([]);
@@ -224,6 +241,30 @@
     originalJson = JSON.stringify(working);
   }
 
+  // ─── AWS profiles tab ─────────────────────────────────────────
+  let refreshingProfiles = $state(false);
+  async function refreshAwsProfiles() {
+    refreshingProfiles = true;
+    try {
+      const snap = await ipc.listAwsProfiles();
+      awsProfiles.set(snap.profiles);
+      awsConfigPath.set(snap.configPath);
+    } finally {
+      refreshingProfiles = false;
+    }
+  }
+
+  function profileDetail(p: AwsProfile): Array<[string, string]> {
+    const rows: Array<[string, string]> = [];
+    if (p.region) rows.push(['Region', p.region]);
+    if (p.ssoSession) rows.push(['SSO session', p.ssoSession]);
+    if (p.ssoAccountId) rows.push(['Account ID', p.ssoAccountId]);
+    if (p.ssoRoleName) rows.push(['Role', p.ssoRoleName]);
+    if (p.ssoStartUrl) rows.push(['SSO start URL', p.ssoStartUrl]);
+    if (p.ssoRegion && p.ssoRegion !== p.region) rows.push(['SSO region', p.ssoRegion]);
+    return rows;
+  }
+
   function summary(a: Alias): string {
     if (a.kind === 'sso-login') return a.ssoSessionName ?? '—';
     if (a.kind === 'iam-profile') return a.profile ?? '—';
@@ -236,37 +277,72 @@
 </script>
 
 <div class="tui-screen">
-  <!-- Toolbar -->
+  <!-- Toolbar (tab-aware) -->
   <div class="tui-toolbar">
     <div class="tui-toolbar-title">
       <span class="tui-toolbar-title-icon"><GearSix size={15} weight="regular" /></span>
       Settings
     </div>
     <div class="tui-toolbar-stats">
-      <span class="tui-stat"><strong>{working.length}</strong> aliases</span>
-      {#if dirty}
-        <span class="tui-stat tui-stat-warn">unsaved changes</span>
-      {:else if savedAt}
-        <span class="tui-stat tui-stat-ok"><Check size={11} weight="bold" /> saved</span>
+      {#if activeTab === 'aliases'}
+        <span class="tui-stat"><strong>{working.length}</strong> aliases</span>
+        {#if dirty}
+          <span class="tui-stat tui-stat-warn">unsaved changes</span>
+        {:else if savedAt}
+          <span class="tui-stat tui-stat-ok"><Check size={11} weight="bold" /> saved</span>
+        {/if}
+      {:else if activeTab === 'profiles'}
+        <span class="tui-stat"><strong>{$awsProfiles.length}</strong> profiles</span>
       {/if}
     </div>
     <div class="tui-toolbar-spacer"></div>
-    {#if dirty}
-      <button type="button" class="tui-btn tui-btn-ghost tui-btn-sm" onclick={revert} disabled={saving}>
-        <ArrowCounterClockwise size={12} weight="regular" />
-        Revert
+    {#if activeTab === 'aliases'}
+      {#if dirty}
+        <button type="button" class="tui-btn tui-btn-ghost tui-btn-sm" onclick={revert} disabled={saving}>
+          <ArrowCounterClockwise size={12} weight="regular" />
+          Revert
+        </button>
+      {/if}
+      <button
+        type="button"
+        class="tui-btn tui-btn-default tui-btn-sm"
+        onclick={save}
+        disabled={!dirty || saving}
+        title="Write changes back to the aliases file"
+      >
+        <FloppyDisk size={12} weight="regular" />
+        {saving ? 'Saving…' : 'Save changes'}
+      </button>
+    {:else if activeTab === 'profiles'}
+      <button
+        type="button"
+        class="tui-btn tui-btn-ghost tui-btn-sm"
+        onclick={refreshAwsProfiles}
+        disabled={refreshingProfiles}
+        title="Re-read ~/.aws/config and ~/.aws/credentials"
+      >
+        <ArrowsClockwise size={12} weight="regular" class={refreshingProfiles ? 'tui-spinner' : ''} />
+        Refresh
       </button>
     {/if}
-    <button
-      type="button"
-      class="tui-btn tui-btn-default tui-btn-sm"
-      onclick={save}
-      disabled={!dirty || saving}
-      title="Write changes back to the aliases file"
-    >
-      <FloppyDisk size={12} weight="regular" />
-      {saving ? 'Saving…' : 'Save changes'}
-    </button>
+  </div>
+
+  <!-- Sub-menu tabs -->
+  <div class="tui-settings-tabs" role="tablist">
+    {#each TABS as t (t.id)}
+      {@const TabIcon = t.Icon}
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === t.id}
+        class="tui-settings-tab"
+        class:is-active={activeTab === t.id}
+        onclick={() => (activeTab = t.id)}
+      >
+        <TabIcon size={13} weight={activeTab === t.id ? 'bold' : 'regular'} />
+        {t.label}
+      </button>
+    {/each}
   </div>
 
   {#if saveError}
@@ -278,6 +354,7 @@
 
   <!-- Content split -->
   <div class="tui-settings-body">
+    {#if activeTab === 'aliases'}
     <!-- Aliases list / editor -->
     <section class="tui-settings-section">
       <header class="tui-settings-section-head">
@@ -341,6 +418,71 @@
         </div>
       {/if}
     </section>
+    {:else if activeTab === 'profiles'}
+    <!-- AWS Profiles (read from ~/.aws/config + ~/.aws/credentials) -->
+    <section class="tui-settings-section">
+      <header class="tui-settings-section-head">
+        <div>
+          <h2 class="tui-settings-section-title">AWS profiles</h2>
+          <p class="tui-settings-section-sub">
+            Read from
+            <span class="tui-settings-path" style="cursor: default;">
+              <FolderOpen size={11} weight="regular" />
+              <span>{$awsConfigPath ?? '~/.aws/config'}</span>
+            </span>
+            {#if $awsProfiles.length > 0}
+              · {$awsProfiles.length} profile{$awsProfiles.length === 1 ? '' : 's'}
+            {/if}
+          </p>
+        </div>
+      </header>
+
+      {#if $awsProfiles.length === 0}
+        <div class="tui-empty" style="padding: 32px;">
+          <div class="tui-empty-title">No profiles found</div>
+          <div class="tui-empty-sub">
+            Couldn't read <code>~/.aws/config</code> or <code>~/.aws/credentials</code>.
+            Configure a profile via <code>aws configure</code> or
+            <code>aws configure sso</code>, then click <strong>Refresh</strong>.
+          </div>
+        </div>
+      {:else}
+        <div class="tui-profile-grid">
+          {#each $awsProfiles as p (p.name)}
+            {@const rows = profileDetail(p)}
+            <article class="tui-profile-card">
+              <header class="tui-profile-card-head">
+                <span class="tui-profile-card-icon">
+                  {#if p.isSso}
+                    <SignIn size={14} weight="bold" />
+                  {:else}
+                    <IdentificationCard size={14} weight="bold" />
+                  {/if}
+                </span>
+                <span class="tui-profile-card-name">{p.name}</span>
+                {#if p.isSso}
+                  <span class="tui-context-menu-item-tag">SSO</span>
+                {/if}
+                <span class="tui-profile-card-source">{p.source}</span>
+              </header>
+              {#if rows.length === 0}
+                <div class="tui-profile-card-empty">No additional fields configured.</div>
+              {:else}
+                <dl class="tui-profile-card-rows">
+                  {#each rows as [label, value] (label)}
+                    <div class="tui-profile-card-row">
+                      <dt>{label}</dt>
+                      <dd title={value}>{value}</dd>
+                    </div>
+                  {/each}
+                </dl>
+              {/if}
+            </article>
+          {/each}
+        </div>
+      {/if}
+    </section>
+    {/if}
   </div>
 
   <!-- Edit / Add form drawer -->

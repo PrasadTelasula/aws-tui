@@ -99,3 +99,24 @@ export interface Container {
   lastStatus: string;
   health: string | null;
 }
+
+/** A profile parsed from ~/.aws/config or ~/.aws/credentials. */
+export interface AwsProfile {
+  name: string;
+  region: string | null;
+  ssoSession: string | null;
+  ssoAccountId: string | null;
+  ssoRoleName: string | null;
+  ssoStartUrl: string | null;
+  ssoRegion: string | null;
+  /** "config" or "credentials" — where the profile was first discovered. */
+  source: string;
+  isSso: boolean;
+}
+
+export interface AwsConfigSnapshot {
+  configPath: string | null;
+  credentialsPath: string | null;
+  profiles: AwsProfile[];
+  ssoSessions: string[];
+}

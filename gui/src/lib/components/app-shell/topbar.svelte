@@ -1,6 +1,6 @@
 <script lang="ts">
   import { page } from '$app/stores';
-  import { profile, region, aliasesPath, aliases, sessions } from '$lib/stores/aws';
+  import { profile, region, aliasesPath, aliases, sessions, awsProfiles } from '$lib/stores/aws';
   import { isActive } from '$lib/sessions-helpers';
   import { ipc } from '$lib/ipc';
   import { onMount, onDestroy } from 'svelte';
@@ -113,13 +113,22 @@
     return out;
   });
 
-  // Profile picker shows only active profiles. The current $profile is
-  // included even if it isn't active, so the user can see what's set.
-  let profileOptions = $derived.by(() => {
-    const set = new Set<string>(activeProfiles);
-    if ($profile) set.add($profile);
-    return [...set].sort();
+  // Profile picker shows two groups:
+  //   1. Active — currently has a live session (pulsing green dot)
+  //   2. Configured — every profile from ~/.aws/config and credentials
+  //      that isn't already in the Active group
+  let activeOptions = $derived.by(() => [...activeProfiles].sort());
+  let configuredOptions = $derived.by(() => {
+    const out: typeof $awsProfiles = [];
+    for (const p of $awsProfiles) {
+      if (!activeProfiles.has(p.name)) out.push(p);
+    }
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    return out;
   });
+  let profileOptionsCount = $derived(
+    activeOptions.length + configuredOptions.length + ($profile && !activeProfiles.has($profile) && !$awsProfiles.some(p => p.name === $profile) ? 1 : 0)
+  );
 
   // A reasonable set of AWS commercial regions, plus any seen in aliases.
   const COMMON_REGIONS = [
@@ -132,6 +141,7 @@
   let regionOptions = $derived.by(() => {
     const set = new Set<string>(COMMON_REGIONS);
     for (const a of $aliases) if (a.region) set.add(a.region);
+    for (const p of $awsProfiles) if (p.region) set.add(p.region);
     if ($region) set.add($region);
     return [...set].sort();
   });
@@ -212,28 +222,68 @@
     </button>
     {#if profileMenuOpen}
       <div class="tui-context-menu" role="listbox">
-        {#if profileOptions.length === 0}
-          <div class="tui-context-menu-empty">No active sessions</div>
+        {#if profileOptionsCount === 0}
+          <div class="tui-context-menu-empty">No profiles configured</div>
         {:else}
-          <div class="tui-context-menu-section">
-            {activeProfiles.size} active
-          </div>
-          {#each profileOptions as p (p)}
-            {@const active = activeProfiles.has(p)}
-            {@const selected = $profile === p}
+          {#if activeOptions.length > 0}
+            <div class="tui-context-menu-section">
+              {activeOptions.length} active
+            </div>
+            {#each activeOptions as p (p)}
+              {@const selected = $profile === p}
+              <button
+                type="button"
+                class="tui-context-menu-item"
+                class:is-active={selected}
+                onclick={() => selectProfile(p)}
+              >
+                <StatusDot tone="ok" pulse size={6} />
+                <span class="tui-context-menu-item-name">{p}</span>
+                {#if selected}
+                  <span class="tui-context-menu-item-check"><Check size={11} weight="bold" /></span>
+                {/if}
+              </button>
+            {/each}
+          {/if}
+          {#if configuredOptions.length > 0}
+            <div class="tui-context-menu-section">
+              {configuredOptions.length} configured
+            </div>
+            {#each configuredOptions as p (p.name)}
+              {@const selected = $profile === p.name}
+              <button
+                type="button"
+                class="tui-context-menu-item"
+                class:is-active={selected}
+                onclick={() => selectProfile(p.name)}
+                title={[p.region, p.ssoSession ? `SSO: ${p.ssoSession}` : null].filter(Boolean).join(' · ')}
+              >
+                <StatusDot tone="muted" size={6} />
+                <span class="tui-context-menu-item-name">{p.name}</span>
+                {#if p.isSso}
+                  <span class="tui-context-menu-item-tag">SSO</span>
+                {/if}
+                {#if p.region}
+                  <span class="tui-context-menu-item-region">{p.region}</span>
+                {/if}
+                {#if selected}
+                  <span class="tui-context-menu-item-check"><Check size={11} weight="bold" /></span>
+                {/if}
+              </button>
+            {/each}
+          {/if}
+          {#if $profile && !activeProfiles.has($profile) && !$awsProfiles.some(p => p.name === $profile)}
+            <div class="tui-context-menu-section">current</div>
             <button
               type="button"
-              class="tui-context-menu-item"
-              class:is-active={selected}
-              onclick={() => selectProfile(p)}
+              class="tui-context-menu-item is-active"
+              onclick={() => selectProfile($profile)}
             >
-              <StatusDot tone={active ? 'ok' : 'muted'} pulse={active} size={6} />
-              <span class="tui-context-menu-item-name">{p}</span>
-              {#if selected}
-                <span class="tui-context-menu-item-check"><Check size={11} weight="bold" /></span>
-              {/if}
+              <StatusDot tone="muted" size={6} />
+              <span class="tui-context-menu-item-name">{$profile}</span>
+              <span class="tui-context-menu-item-check"><Check size={11} weight="bold" /></span>
             </button>
-          {/each}
+          {/if}
         {/if}
       </div>
     {/if}

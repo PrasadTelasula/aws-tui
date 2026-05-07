@@ -75,6 +75,14 @@ pub async fn get_config(state: State<'_, AppState>) -> Result<AppConfig, String>
     Ok(state.config.lock().unwrap().clone())
 }
 
+/// Read profiles from the user's `~/.aws/config` and `~/.aws/credentials`.
+/// Returns each profile with the most useful fields surfaced (region,
+/// linked SSO session, role/account, source file).
+#[tauri::command]
+pub async fn list_aws_profiles() -> Result<crate::aws_config::AwsConfigSnapshot, String> {
+    Ok(crate::aws_config::snapshot())
+}
+
 #[tauri::command]
 pub async fn set_aliases_path(
     path: String,

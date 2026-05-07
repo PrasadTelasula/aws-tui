@@ -554,6 +554,24 @@ body {
   display: inline-flex;
   flex-shrink: 0;
 }
+.tui-context-menu-item-tag {
+  font-family: var(--tui-font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--tui-violet-soft);
+  color: var(--tui-violet);
+  border: 1px solid rgba(176,123,255,0.22);
+  flex-shrink: 0;
+}
+.tui-context-menu-item-region {
+  font-family: var(--tui-font-mono);
+  font-size: 10px;
+  color: var(--tui-fg-4);
+  flex-shrink: 0;
+}
 
 .tui-cmd-trigger {
   flex: 1;

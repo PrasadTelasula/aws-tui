@@ -1,4 +1,5 @@
 mod aws;
+mod aws_config;
 mod commands;
 mod config;
 mod model;
@@ -28,6 +29,7 @@ pub fn run() {
             commands::list_aliases,
             commands::set_aliases_path,
             commands::save_aliases,
+            commands::list_aws_profiles,
             commands::get_config,
             commands::list_instances,
             commands::describe_instance,

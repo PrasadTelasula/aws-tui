@@ -12,6 +12,7 @@ import type {
   AliasKind,
   AliasesResponse,
   AppConfig,
+  AwsConfigSnapshot,
   Cluster,
   Container,
   CredentialInfo,
@@ -36,6 +37,7 @@ export const ipc = {
   setAliasesPath: (path: string) => invoke<AliasesResponse>('set_aliases_path', { path }),
   saveAliases: (path: string | null, aliases: Alias[]) =>
     invoke<AliasesResponse>('save_aliases', { path, aliases }),
+  listAwsProfiles: () => invoke<AwsConfigSnapshot>('list_aws_profiles'),
   getConfig: () => invoke<AppConfig>('get_config'),
 
   // -------- sessions --------

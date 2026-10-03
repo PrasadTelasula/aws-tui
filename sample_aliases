@@ -13,9 +13,9 @@ alias watermarkawsstg='aws sso login --sso-session sso-watermark-stg'
 alias watermarkawsdev='aws sso login --sso-session sso-watermark-dev'
 
 # AWS SSM Start Session aliases (Database port forwarding)
-alias dmscdbint='aws ssm start-session --target i-0abc123def456 --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters {"portNumber":["1111"],"host":["db.int.registry-svc.sonypictures.com"],"localPortNumber":["1111"]}'
-alias dmscdbstg='aws ssm start-session --target i-0abc123def789 --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters {"portNumber":["1112"],"host":["db.stg.registry-svc.sonypictures.com"],"localPortNumber":["1112"]}'
-alias dmscdbprd='aws ssm start-session --target i-0abc123def012 --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters {"portNumber":["1113"],"host":["db.registry-svc.sonypictures.com"],"localPortNumber":["1113"]}'
+alias dmscdbint='aws ssm start-session --target i-0abc123def456 --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters {"portNumber":["1111"],"host":["db.int.registry-svc.example.com"],"localPortNumber":["1111"]}'
+alias dmscdbstg='aws ssm start-session --target i-0abc123def789 --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters {"portNumber":["1112"],"host":["db.stg.registry-svc.example.com"],"localPortNumber":["1112"]}'
+alias dmscdbprd='aws ssm start-session --target i-0abc123def012 --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters {"portNumber":["1113"],"host":["db.registry-svc.example.com"],"localPortNumber":["1113"]}'
 
 # Watermark DB
 alias watermarkdbprd='aws ssm start-session --target i-0def456abc789 --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters {"portNumber":["5432"],"localPortNumber":["2222"],"host":["watermark-db.internal"]}'
